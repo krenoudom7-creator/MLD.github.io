@@ -1,0 +1,1901 @@
+<!DOCTYPE html>
+<html lang="km">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>កាហ្វេ ម្លប់ដូង - Dynamic Product Management & POS System</title>
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Fonts Khmer (Kantumruy Pro) -->
+    <link href="https://fonts.googleapis.com/css2?family=Kantumruy+Pro:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+    <style>
+        * {
+            font-family: 'Kantumruy Pro', sans-serif;
+        }
+
+        body {
+            background-color: #0b0e14;
+            color: #e2e8f0;
+            min-height: 100vh;
+        }
+
+        /* Color Palette & Utilities */
+        .text-gold { color: #ffd700 !important; }
+        .bg-gold { background-color: #ffd700 !important; color: #0b0e14 !important; }
+        .border-gold { border-color: #ffd700 !important; }
+
+        .btn-gold {
+            background-color: #ffd700;
+            color: #0b0e14;
+            font-weight: 600;
+            border: none;
+            transition: all 0.25s ease;
+        }
+
+        .btn-gold:hover {
+            background-color: #e6c200;
+            color: #0b0e14;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(255, 215, 0, 0.3);
+        }
+
+        .btn-outline-gold {
+            color: #ffd700;
+            border: 1px solid rgba(255, 215, 0, 0.4);
+            background: rgba(255, 215, 0, 0.05);
+            transition: all 0.25s ease;
+        }
+
+        .btn-outline-gold:hover {
+            background-color: #ffd700;
+            color: #0b0e14;
+            box-shadow: 0 4px 12px rgba(255, 215, 0, 0.25);
+        }
+
+        .glass-card {
+            background: rgba(23, 28, 40, 0.75);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 16px;
+        }
+
+        .product-card {
+            transition: all 0.25s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .product-card:hover {
+            transform: translateY(-5px);
+            border-color: rgba(255, 215, 0, 0.5);
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+        }
+
+        .product-card.out-of-stock {
+            opacity: 0.65;
+            filter: grayscale(0.2);
+        }
+
+        .category-btn {
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            color: #b0b3c6;
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 30px;
+            padding: 6px 18px;
+            font-size: 0.9rem;
+            transition: all 0.2s ease;
+        }
+
+        .category-btn:hover, .category-btn.active {
+            background-color: #ffd700;
+            color: #0b0e14;
+            border-color: #ffd700;
+            font-weight: 600;
+        }
+
+        .sugar-badge {
+            background: rgba(255, 215, 0, 0.15);
+            color: #ffd700;
+            border: 1px solid rgba(255, 215, 0, 0.3);
+            font-size: 0.75rem;
+            padding: 2px 8px;
+            border-radius: 6px;
+            display: inline-block;
+        }
+
+        .order-card {
+            border-left: 5px solid #6c757d;
+            transition: all 0.25s ease;
+        }
+        .order-card.status-pending { border-left-color: #ffc107; }
+        .order-card.status-preparing { border-left-color: #0dcaf0; }
+        .order-card.status-completed { border-left-color: #198754; }
+        .order-card.status-cancelled { border-left-color: #dc3545; }
+
+        .status-badge-pending { background: rgba(255, 193, 7, 0.15); color: #ffc107; border: 1px solid rgba(255, 193, 7, 0.3); }
+        .status-badge-preparing { background: rgba(13, 202, 240, 0.15); color: #0dcaf0; border: 1px solid rgba(13, 202, 240, 0.3); }
+        .status-badge-completed { background: rgba(25, 135, 84, 0.15); color: #20c997; border: 1px solid rgba(25, 135, 84, 0.3); }
+        .status-badge-cancelled { background: rgba(220, 53, 69, 0.15); color: #ea868f; border: 1px solid rgba(220, 53, 69, 0.3); }
+
+        .custom-table th {
+            background-color: rgba(255, 215, 0, 0.1) !important;
+            color: #ffd700 !important;
+            border-color: rgba(255, 255, 255, 0.08) !important;
+        }
+        .custom-table td {
+            background-color: rgba(23, 28, 40, 0.5) !important;
+            color: #e2e8f0 !important;
+            border-color: rgba(255, 255, 255, 0.05) !important;
+            vertical-align: middle;
+        }
+
+        .offcanvas {
+            background-color: #121622;
+            color: #fff;
+            border-left: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .btn-check:checked + .btn-sugar-option {
+            background-color: #ffd700 !important;
+            color: #0b0e14 !important;
+            font-weight: bold;
+            border-color: #ffd700 !important;
+            box-shadow: 0 0 10px rgba(255, 215, 0, 0.4);
+        }
+
+        .img-preview-box {
+            width: 100%;
+            height: 180px;
+            border: 2px dashed rgba(255, 215, 0, 0.3);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0, 0, 0, 0.2);
+            overflow: hidden;
+            position: relative;
+        }
+
+        .img-preview-box img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        /* Toast notification */
+        .toast-container {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            z-index: 1090;
+        }
+
+        /* Print Receipt Style */
+        @media print {
+            body * { visibility: hidden; }
+            #receiptModal .modal-content, #receiptModal .modal-content * { visibility: visible; }
+            #receiptModal .modal-content { position: absolute; left: 0; top: 0; width: 100%; color: #000 !important; background: #fff !important; }
+            .no-print { display: none !important; }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Header Navigation -->
+    <nav class="navbar navbar-expand-lg border-bottom border-secondary border-opacity-25 py-2 sticky-top" style="background: rgba(11, 14, 20, 0.95); backdrop-filter: blur(10px);">
+        <div class="container-fluid px-4">
+            <a class="navbar-brand fw-bold d-flex align-items-center gap-2" href="#">
+                <!-- Custom Mlob Doung Coffee Logo SVG -->
+                <svg width="42" height="42" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <circle cx="32" cy="32" r="30" fill="url(#logoGrad)" stroke="#ffd700" stroke-width="2"/>
+                    <defs>
+                        <linearGradient id="logoGrad" x1="0" y1="0" x2="64" y2="64">
+                            <stop offset="0%" stop-color="#1e293b"/>
+                            <stop offset="100%" stop-color="#0f172a"/>
+                        </linearGradient>
+                    </defs>
+                    <!-- Coconut Tree Leaves -->
+                    <path d="M32 28 C 25 18 12 18 8 22 C 17 23 26 27 30 29 Z" fill="#22c55e"/>
+                    <path d="M32 28 C 39 18 52 18 56 22 C 47 23 38 27 34 29 Z" fill="#16a34a"/>
+                    <path d="M32 28 C 22 14 14 10 10 12 C 17 16 26 22 30 28 Z" fill="#4ade80"/>
+                    <path d="M32 28 C 42 14 50 10 54 12 C 47 16 38 22 34 28 Z" fill="#22c55e"/>
+                    <!-- Palm Trunk -->
+                    <path d="M30 30 Q 28 42 26 50 H 32 Q 32 42 32 30 Z" fill="#a16207"/>
+                    <!-- Coffee Cup Overlay -->
+                    <rect x="29" y="36" width="18" height="14" rx="4" fill="#ffd700"/>
+                    <path d="M47 39 C 50 39 52 41 52 43 C 52 45 50 47 47 47" stroke="#ffd700" stroke-width="2" fill="none"/>
+                    <!-- Steam Lines -->
+                    <path d="M33 33 Q 35 31 33 29" stroke="#ffd700" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+                    <path d="M38 33 Q 40 31 38 29" stroke="#ffd700" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+                    <path d="M43 33 Q 45 31 43 29" stroke="#ffd700" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+                </svg>
+                <div class="d-flex flex-column leading-none">
+                    <span class="fs-4 text-gold fw-bold" style="line-height: 1.1;">កាហ្វេ ម្លប់ដូង</span>
+                    <small class="text-secondary fw-semibold" style="font-size: 0.65rem; letter-spacing: 1px;">MLOB DOUNG COFFEE</small>
+                </div>
+            </a>
+
+            <!-- Mode Switcher Tabs -->
+            <div class="d-flex flex-wrap align-items-center gap-2 my-2 my-lg-0">
+                <button class="btn btn-gold rounded-pill px-3 py-2 fw-bold active d-flex align-items-center gap-2" id="btnTabPos" onclick="switchTab('pos')">
+                    <i class="fa-solid fa-store"></i> ហាងទំនិញ (POS)
+                </button>
+                <button class="btn btn-outline-gold rounded-pill px-3 py-2 fw-bold d-flex align-items-center gap-2 position-relative" id="btnTabKds" onclick="switchTab('kds')">
+                    <i class="fa-solid fa-list-check"></i> ការកម្ម៉ង់ (Orders)
+                    <span id="kdsPendingBadge" class="badge rounded-pill bg-danger" style="font-size: 0.75rem;">0</span>
+                </button>
+                <button class="btn btn-outline-gold rounded-pill px-3 py-2 fw-bold d-flex align-items-center gap-2" id="btnTabAdmin" onclick="switchTab('admin')">
+                    <i class="fa-solid fa-user-shield"></i> ប្រព័ន្ធគ្រប់គ្រង (Admin)
+                    <span id="adminLockBadge" class="badge bg-secondary"><i class="fa-solid fa-lock"></i></span>
+                </button>
+            </div>
+
+            <!-- Cart Trigger, Admin Status & Clock -->
+            <div class="d-flex align-items-center gap-3">
+                <!-- Cart Button -->
+                <button class="btn btn-outline-gold rounded-pill px-3 py-2 position-relative" id="posCartBtn" type="button" data-bs-toggle="offcanvas" data-bs-target="#cartOffcanvas">
+                    <i class="fa-solid fa-cart-shopping me-1"></i> កន្ត្រក
+                    <span id="cartBadge" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-gold text-dark fw-bold">0</span>
+                </button>
+
+                <!-- Admin Auth Button -->
+                <div id="adminAuthNav">
+                    <button class="btn btn-sm btn-outline-light rounded-pill px-3" onclick="openAdminLoginModal()" id="btnLoginNav">
+                        <i class="fa-solid fa-right-to-bracket me-1"></i> ចូលគណនី Admin
+                    </button>
+                </div>
+
+                <!-- Clock -->
+                <div class="text-end text-secondary small d-none d-md-block border-start border-secondary border-opacity-50 ps-3">
+                    <div class="text-white fw-bold"><i class="fa-solid fa-clock me-1 text-gold"></i> <span id="clockDisplay">--:--:--</span></div>
+                    <div>ថ្ងៃនេះ: <span id="dateDisplay">--/--/----</span></div>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- SECTION 1: PUBLIC SHOP / POS VIEW -->
+    <div id="posSection" class="container-fluid px-4 py-4">
+        
+        <!-- Category & Search Bar -->
+        <div class="glass-card p-3 mb-4 d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
+            <div>
+                <h4 class="fw-bold text-gold mb-1"><i class="fa-solid fa-boxes-stacked me-2"></i>កាតាលុកទំនិញ កាហ្វេ ម្លប់ដូង</h4>
+                <p class="text-secondary small mb-0">ជ្រើសរើសទំនិញ ឬភេសជ្ជៈ ដើម្បីបន្ថែមចូលក្នុងកន្ត្រក និងធ្វើការកម្ម៉ង់</p>
+            </div>
+            
+            <div class="d-flex flex-wrap align-items-center gap-2">
+                <div class="d-flex flex-wrap gap-2" id="categoryFilters">
+                    <button class="btn category-btn active" onclick="filterCategory('all', this)">ទាំងអស់</button>
+                    <button class="btn category-btn" onclick="filterCategory('coffee', this)"><i class="fa-solid fa-mug-hot me-1"></i> កាហ្វេ</button>
+                    <button class="btn category-btn" onclick="filterCategory('tea', this)"><i class="fa-solid fa-leaf me-1"></i> តែ & ឡាតេ</button>
+                    <button class="btn category-btn" onclick="filterCategory('drink', this)"><i class="fa-solid fa-wine-glass me-1"></i> ភេសជ្ជៈ</button>
+                    <button class="btn category-btn" onclick="filterCategory('bakery', this)"><i class="fa-solid fa-bread-slice me-1"></i> នំ & អាហារ</button>
+                </div>
+                
+                <div class="input-group input-group-sm ms-md-2" style="max-width: 220px;">
+                    <span class="input-group-text bg-dark border-secondary text-secondary"><i class="fa-solid fa-magnifying-glass"></i></span>
+                    <input type="text" id="posSearchInput" class="form-control bg-dark text-white border-secondary" placeholder="ស្វែងរកទំនិញ..." onkeyup="renderPosProducts()">
+                </div>
+            </div>
+        </div>
+
+        <!-- Products Display Grid -->
+        <div class="row g-3" id="productsGrid">
+            <!-- Dynamic Product Cards -->
+        </div>
+    </div>
+
+    <!-- SECTION 2: ORDER MANAGEMENT SYSTEM (KDS) VIEW -->
+    <div id="kdsSection" class="container-fluid px-4 py-4 d-none">
+
+        <!-- Metrics Dashboard Row -->
+        <div class="row g-3 mb-4">
+            <div class="col-6 col-md-4 col-xl-2.4 flex-fill">
+                <div class="glass-card p-3 d-flex align-items-center justify-content-between">
+                    <div>
+                        <span class="text-secondary small fw-bold">ការកម្ម៉ង់សរុប</span>
+                        <h3 class="fw-bold text-white mb-0 mt-1" id="metricTotal">0</h3>
+                    </div>
+                    <div class="rounded-circle bg-primary bg-opacity-25 p-3 text-primary fs-4">
+                        <i class="fa-solid fa-receipt"></i>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-6 col-md-4 col-xl-2.4 flex-fill">
+                <div class="glass-card p-3 d-flex align-items-center justify-content-between">
+                    <div>
+                        <span class="text-warning small fw-bold">កំពុងរង់ចាំ (Pending)</span>
+                        <h3 class="fw-bold text-warning mb-0 mt-1" id="metricPending">0</h3>
+                    </div>
+                    <div class="rounded-circle bg-warning bg-opacity-25 p-3 text-warning fs-4">
+                        <i class="fa-solid fa-hourglass-half"></i>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-6 col-md-4 col-xl-2.4 flex-fill">
+                <div class="glass-card p-3 d-flex align-items-center justify-content-between">
+                    <div>
+                        <span class="text-info small fw-bold">កំពុងរៀបចំ (Preparing)</span>
+                        <h3 class="fw-bold text-info mb-0 mt-1" id="metricPreparing">0</h3>
+                    </div>
+                    <div class="rounded-circle bg-info bg-opacity-25 p-3 text-info fs-4">
+                        <i class="fa-solid fa-fire-burner"></i>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-6 col-md-4 col-xl-2.4 flex-fill">
+                <div class="glass-card p-3 d-flex align-items-center justify-content-between">
+                    <div>
+                        <span class="text-success small fw-bold">រួចរាល់ (Completed)</span>
+                        <h3 class="fw-bold text-success mb-0 mt-1" id="metricCompleted">0</h3>
+                    </div>
+                    <div class="rounded-circle bg-success bg-opacity-25 p-3 text-success fs-4">
+                        <i class="fa-solid fa-circle-check"></i>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-12 col-md-4 col-xl-2.4 flex-fill">
+                <div class="glass-card p-3 d-flex align-items-center justify-content-between">
+                    <div>
+                        <span class="text-gold small fw-bold">ចំណូលសរុប (Revenue)</span>
+                        <h3 class="fw-bold text-gold mb-0 mt-1" id="metricRevenue">$0.00</h3>
+                    </div>
+                    <div class="rounded-circle bg-gold bg-opacity-25 p-3 text-gold fs-4">
+                        <i class="fa-solid fa-sack-dollar"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Filter and Search Controls -->
+        <div class="glass-card p-3 mb-4 d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
+            <div class="d-flex flex-wrap gap-2" id="filterButtons">
+                <button class="btn btn-outline-light rounded-pill btn-sm px-3 active" onclick="filterStatus('all', this)">ទាំងអស់ (<span id="cntAll">0</span>)</button>
+                <button class="btn btn-outline-warning rounded-pill btn-sm px-3" onclick="filterStatus('pending', this)"><i class="fa-solid fa-clock me-1"></i>កំពុងរង់ចាំ</button>
+                <button class="btn btn-outline-info rounded-pill btn-sm px-3" onclick="filterStatus('preparing', this)"><i class="fa-solid fa-spinner me-1"></i>កំពុងរៀបចំ</button>
+                <button class="btn btn-outline-success rounded-pill btn-sm px-3" onclick="filterStatus('completed', this)"><i class="fa-solid fa-check me-1"></i>រួចរាល់</button>
+                <button class="btn btn-outline-danger rounded-pill btn-sm px-3" onclick="filterStatus('cancelled', this)"><i class="fa-solid fa-xmark me-1"></i>លុបចោល</button>
+            </div>
+
+            <div class="d-flex flex-wrap align-items-center gap-2">
+                <div class="input-group input-group-sm" style="max-width: 220px;">
+                    <span class="input-group-text bg-dark border-secondary text-secondary"><i class="fa-solid fa-magnifying-glass"></i></span>
+                    <input type="text" id="kdsSearchInput" class="form-control bg-dark text-white border-secondary" placeholder="ស្វែងរកឈ្មោះ/តុ..." onkeyup="renderDashboard()">
+                </div>
+
+                <div class="btn-group btn-group-sm" role="group">
+                    <button id="btnGridView" class="btn btn-gold active" onclick="setViewMode('grid')" title="មើលជា Cards"><i class="fa-solid fa-grip"></i></button>
+                    <button id="btnTableView" class="btn btn-outline-gold" onclick="setViewMode('table')" title="មើលជា តារាង"><i class="fa-solid fa-list-ul"></i></button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Orders Display Container -->
+        <div class="row g-3" id="ordersGridContainer"></div>
+
+        <div class="glass-card p-3 d-none" id="ordersTableContainer">
+            <div class="table-responsive">
+                <table class="table table-dark custom-table align-middle mb-0">
+                    <thead>
+                        <tr>
+                            <th># លេខកូដ</th>
+                            <th>ឈ្មោះអតិថិជន</th>
+                            <th>លេខតុ</th>
+                            <th>មុខទំនិញ</th>
+                            <th>តម្លៃសរុប</th>
+                            <th>ពេលវេលា</th>
+                            <th>ស្ថានភាព</th>
+                            <th class="text-center">សកម្មភាព</th>
+                        </tr>
+                    </thead>
+                    <tbody id="ordersTableBody"></tbody>
+                </table>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- SECTION 3: ADMIN PRODUCT MANAGEMENT DASHBOARD -->
+    <div id="adminSection" class="container-fluid px-4 py-4 d-none">
+        
+        <!-- Admin Restricted Guard Message (If Not Logged In) -->
+        <div id="adminGuardNotice" class="glass-card p-5 text-center my-5 d-none">
+            <div class="mb-3 text-warning">
+                <i class="fa-solid fa-shield-halved fa-4x"></i>
+            </div>
+            <h3 class="fw-bold text-gold mb-2">តម្រូវឱ្យចូលប្រើប្រាស់ជា Admin</h3>
+            <p class="text-secondary mb-4">សូមចូលប្រើប្រាស់គណនី Admin ដើម្បីគ្រប់គ្រងទំនិញ បន្ថែម កែប្រែ ឬលុបទំនិញក្នុងប្រព័ន្ធ។</p>
+            <button class="btn btn-gold px-4 py-2 rounded-pill fw-bold" onclick="openAdminLoginModal()">
+                <i class="fa-solid fa-right-to-bracket me-2"></i>ចូលប្រព័ន្ធ Admin (Login)
+            </button>
+        </div>
+
+        <!-- Admin Content Area (If Logged In) -->
+        <div id="adminMainContent">
+            
+            <!-- Header Bar -->
+            <div class="glass-card p-4 mb-4 d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
+                <div>
+                    <div class="d-flex align-items-center gap-2">
+                        <h4 class="fw-bold text-gold mb-0"><i class="fa-solid fa-list-check me-2"></i>ប្រព័ន្ធគ្រប់គ្រងទំនិញ (Product Management System)</h4>
+                        <span class="badge bg-success"><i class="fa-solid fa-circle-check me-1"></i> Admin Active</span>
+                    </div>
+                    <p class="text-secondary small mb-0 mt-1">គ្រប់គ្រងទំនិញ បង្កើតថ្មី កែប្រែតម្លៃ ស្តុក ស្ថានភាព និងភ្ជាប់ជាមួយ Backend API</p>
+                </div>
+
+                <div class="d-flex flex-wrap gap-2">
+                    <button class="btn btn-outline-gold rounded-pill px-3 py-2 fw-bold" onclick="openApiConfigModal()">
+                        <i class="fa-solid fa-database me-1"></i> ការកំណត់ Backend API
+                    </button>
+                    <button class="btn btn-outline-gold rounded-pill px-3 py-2 fw-bold" onclick="openChangePasswordModal()">
+                        <i class="fa-solid fa-key me-1"></i> ប្តូរពាក្យសម្ងាត់
+                    </button>
+                    <button class="btn btn-gold rounded-pill px-3 py-2 fw-bold" onclick="openAddProductModal()">
+                        <i class="fa-solid fa-circle-plus me-1"></i> បន្ថែមទំនិញថ្មី
+                    </button>
+                </div>
+            </div>
+
+            <!-- Admin Product Stats Cards -->
+            <div class="row g-3 mb-4">
+                <div class="col-6 col-md-3">
+                    <div class="glass-card p-3 d-flex align-items-center justify-content-between">
+                        <div>
+                            <span class="text-secondary small fw-bold">ទំនិញសរុប</span>
+                            <h3 class="fw-bold text-white mb-0 mt-1" id="statTotalProducts">0</h3>
+                        </div>
+                        <div class="rounded-circle bg-gold bg-opacity-25 p-3 text-gold fs-4">
+                            <i class="fa-solid fa-boxes-stacked"></i>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col-6 col-md-3">
+                    <div class="glass-card p-3 d-flex align-items-center justify-content-between">
+                        <div>
+                            <span class="text-success small fw-bold">ទំនិញសកម្ម (Active)</span>
+                            <h3 class="fw-bold text-success mb-0 mt-1" id="statActiveProducts">0</h3>
+                        </div>
+                        <div class="rounded-circle bg-success bg-opacity-25 p-3 text-success fs-4">
+                            <i class="fa-solid fa-eye"></i>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col-6 col-md-3">
+                    <div class="glass-card p-3 d-flex align-items-center justify-content-between">
+                        <div>
+                            <span class="text-danger small fw-bold">អស់ពីស្តុក (Out of Stock)</span>
+                            <h3 class="fw-bold text-danger mb-0 mt-1" id="statOutOfStock">0</h3>
+                        </div>
+                        <div class="rounded-circle bg-danger bg-opacity-25 p-3 text-danger fs-4">
+                            <i class="fa-solid fa-triangle-exclamation"></i>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col-6 col-md-3">
+                    <div class="glass-card p-3 d-flex align-items-center justify-content-between">
+                        <div>
+                            <span class="text-info small fw-bold">ប្រភពទិន្នន័យ DB</span>
+                            <h5 class="fw-bold text-info mb-0 mt-1" id="statDbMode">Backend API</h5>
+                        </div>
+                        <div class="rounded-circle bg-info bg-opacity-25 p-3 text-info fs-4">
+                            <i class="fa-solid fa-server"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Admin Filters & Search -->
+            <div class="glass-card p-3 mb-4 d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
+                <div class="d-flex flex-wrap align-items-center gap-2">
+                    <div class="input-group input-group-sm" style="max-width: 250px;">
+                        <span class="input-group-text bg-dark border-secondary text-secondary"><i class="fa-solid fa-magnifying-glass"></i></span>
+                        <input type="text" id="adminSearchInput" class="form-control bg-dark text-white border-secondary" placeholder="ស្វែងរកឈ្មោះ ឬប្រភេទ..." onkeyup="renderAdminTable()">
+                    </div>
+
+                    <select id="adminCategoryFilter" class="form-select form-select-sm bg-dark text-white border-secondary" style="width: auto;" onchange="renderAdminTable()">
+                        <option value="all">គ្រប់ប្រភេទទាំងអស់</option>
+                        <option value="coffee">កាហ្វេ (Coffee)</option>
+                        <option value="tea">តែ (Tea)</option>
+                        <option value="drink">ភេសជ្ជៈ (Drink)</option>
+                        <option value="bakery">នំ & អាហារ (Bakery/Food)</option>
+                    </select>
+
+                    <select id="adminStatusFilter" class="form-select form-select-sm bg-dark text-white border-secondary" style="width: auto;" onchange="renderAdminTable()">
+                        <option value="all">គ្រប់ស្ថានភាព</option>
+                        <option value="active">សកម្ម (Active)</option>
+                        <option value="inactive">អសកម្ម (Inactive)</option>
+                    </select>
+                </div>
+
+                <div class="text-secondary small">
+                    បង្ហាញទំនិញសរុប: <span id="adminProductCountBadge" class="fw-bold text-gold">0</span>
+                </div>
+            </div>
+
+            <!-- Admin Products Table -->
+            <div class="glass-card p-3 mb-4">
+                <div class="table-responsive">
+                    <table class="table table-dark custom-table align-middle mb-0">
+                        <thead>
+                            <tr>
+                                <th style="width: 70px;">រូបភាព</th>
+                                <th>ឈ្មោះទំនិញ</th>
+                                <th>ប្រភេទ</th>
+                                <th>តម្លៃ ($ USD)</th>
+                                <th>ស្តុក (Qty)</th>
+                                <th>ស្ថានភាព</th>
+                                <th class="text-center" style="width: 180px;">សកម្មភាព</th>
+                            </tr>
+                        </thead>
+                        <tbody id="adminProductsTableBody">
+                            <!-- Dynamic Table Rows -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- MODAL 1: ADD / EDIT PRODUCT -->
+    <div class="modal fade" id="productFormModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered modal-lg">
+            <div class="modal-content glass-card border-0 text-white" style="background: rgba(15, 18, 26, 0.98);">
+                <div class="modal-header border-bottom border-secondary border-opacity-25">
+                    <h5 class="modal-title fw-bold text-gold" id="productModalTitle">
+                        <i class="fa-solid fa-box-open me-2"></i>បន្ថែមទំនិញថ្មី
+                    </h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body py-3">
+                    <form id="productForm" onsubmit="saveProductHandler(event)">
+                        <input type="hidden" id="formProductId" value="">
+
+                        <div class="row g-3 mb-3">
+                            <!-- Product Name -->
+                            <div class="col-md-8">
+                                <label class="form-label text-gold small fw-bold">ឈ្មោះទំនិញ (Product Name) <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control bg-dark text-white border-secondary" id="formProductName" required placeholder="ឧ. Iced Milk Coffee (កាហ្វេទឹកដោះគោ)">
+                            </div>
+
+                            <!-- Category -->
+                            <div class="col-md-4">
+                                <label class="form-label text-gold small fw-bold">ប្រភេទ (Category) <span class="text-danger">*</span></label>
+                                <select class="form-select bg-dark text-white border-secondary" id="formCategory" required>
+                                    <option value="coffee">កាហ្វេ (Coffee)</option>
+                                    <option value="tea">តែ & ឡាតេ (Tea)</option>
+                                    <option value="drink">ភេសជ្ជៈផ្សេងៗ (Drink)</option>
+                                    <option value="bakery">នំ & អាហារ (Bakery)</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="row g-3 mb-3">
+                            <!-- Price USD -->
+                            <div class="col-md-4">
+                                <label class="form-label text-gold small fw-bold">តម្លៃ ($ USD) <span class="text-danger">*</span></label>
+                                <input type="number" step="0.01" min="0" class="form-control bg-dark text-white border-secondary" id="formPrice" required placeholder="2.50">
+                            </div>
+
+                            <!-- Stock Quantity -->
+                            <div class="col-md-4">
+                                <label class="form-label text-gold small fw-bold">ចំនួនក្នុងស្តុក (Stock Qty) <span class="text-danger">*</span></label>
+                                <input type="number" min="0" class="form-control bg-dark text-white border-secondary" id="formStock" required placeholder="50">
+                            </div>
+
+                            <!-- Status -->
+                            <div class="col-md-4">
+                                <label class="form-label text-gold small fw-bold">ស្ថានភាព (Status) <span class="text-danger">*</span></label>
+                                <select class="form-select bg-dark text-white border-secondary" id="formStatus" required>
+                                    <option value="active">សកម្ម (Active)</option>
+                                    <option value="inactive">អសកម្ម (Inactive)</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <!-- Description -->
+                        <div class="mb-3">
+                            <label class="form-label text-gold small fw-bold">ការពិពណ៌នាទំនិញ (Description)</label>
+                            <textarea class="form-control bg-dark text-white border-secondary" id="formDescription" rows="2" placeholder="ពណ៌នាអំពីទំនិញ ឬភេសជ្ជៈ..."></textarea>
+                        </div>
+
+                        <!-- Image Source Selection & Upload -->
+                        <div class="row g-3 mb-3">
+                            <div class="col-md-6">
+                                <label class="form-label text-gold small fw-bold">ជ្រើសរើសរូបភាពពីម៉ាស៊ីន (File Upload)</label>
+                                <input type="file" class="form-control bg-dark text-white border-secondary" id="formImageFile" accept="image/*" onchange="handleImageFileSelect(event)">
+                                <small class="text-secondary d-block mt-1">គាំទ្រប្រភេទ JPG, PNG, WEBP (អតិបរមា 5MB)</small>
+                            </div>
+
+                            <div class="col-md-6">
+                                <label class="form-label text-gold small fw-bold">ឬបញ្ចូល Image URL</label>
+                                <input type="url" class="form-control bg-dark text-white border-secondary" id="formImageUrl" placeholder="https://example.com/image.jpg" oninput="handleImageUrlInput(this.value)">
+                            </div>
+                        </div>
+
+                        <!-- Image Preview Container -->
+                        <div class="mb-3">
+                            <label class="form-label text-gold small fw-bold">រូបភាពមើលជាមុន (Image Preview)</label>
+                            <div class="img-preview-box" id="imagePreviewContainer">
+                                <span class="text-secondary" id="previewPlaceholder"><i class="fa-solid fa-image me-1"></i> មិនទាន់មានរូបភាព</span>
+                                <img id="previewImg" src="" alt="Preview" class="d-none">
+                            </div>
+                        </div>
+
+                        <!-- Modal Footer Action -->
+                        <div class="d-flex justify-content-end gap-2 pt-2 border-top border-secondary border-opacity-25">
+                            <button type="button" class="btn btn-secondary rounded-pill px-4" data-bs-dismiss="modal">បោះបង់</button>
+                            <button type="submit" class="btn btn-gold rounded-pill px-4 fw-bold" id="btnSaveProduct">
+                                <i class="fa-solid fa-floppy-disk me-1"></i> រក្សាទុកទំនិញ
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL 2: ADMIN LOGIN MODAL -->
+    <div class="modal fade" id="adminLoginModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered modal-sm">
+            <div class="modal-content glass-card border-0 text-white" style="background: rgba(15, 18, 26, 0.98);">
+                <div class="modal-header border-bottom border-secondary border-opacity-25">
+                    <h5 class="modal-title fw-bold text-gold"><i class="fa-solid fa-lock me-2"></i>ចូលប្រព័ន្ធ Admin</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body py-3">
+                    <form id="adminLoginForm" onsubmit="handleAdminLogin(event)">
+                        <div class="mb-3">
+                            <label class="form-label text-gold small fw-bold">ឈ្មោះគណនី (Username)</label>
+                            <input type="text" class="form-control bg-dark text-white border-secondary" id="loginUsername" required autocomplete="username">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label text-gold small fw-bold">ពាក្យសម្ងាត់ (Password)</label>
+                            <input type="password" class="form-control bg-dark text-white border-secondary" id="loginPassword" required autocomplete="current-password">
+                        </div>
+                        <button type="submit" class="btn btn-gold w-100 rounded-pill py-2 fw-bold">
+                            <i class="fa-solid fa-right-to-bracket me-1"></i> ចូលប្រើប្រាស់
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL 3: BACKEND API CONFIGURATION MODAL -->
+    <div class="modal fade" id="apiConfigModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content glass-card border-0 text-white" style="background: rgba(15, 18, 26, 0.98);">
+                <div class="modal-header border-bottom border-secondary border-opacity-25">
+                    <h5 class="modal-title fw-bold text-gold"><i class="fa-solid fa-database me-2"></i>ការកំណត់ Backend API</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body py-3">
+                    <p class="text-secondary small">ទុកទទេ ប្រសិនបើ Backend និងគេហទំព័រនេះនៅ Server តែមួយ។ បើ Backend នៅកន្លែងផ្សេង សូមបញ្ចូល URL (ឧ. https://api.example.com)។</p>
+                    <form id="apiConfigForm" onsubmit="saveApiConfig(event)">
+                        <div class="mb-3">
+                            <label class="form-label text-gold small fw-bold">API Base URL</label>
+                            <input type="url" class="form-control bg-dark text-white border-secondary" id="apiBaseInput" placeholder="https://api.example.com">
+                        </div>
+                        <div id="apiTestResult" class="small mb-3"></div>
+                        <div class="d-flex justify-content-between align-items-center pt-2 border-top border-secondary border-opacity-25">
+                            <button type="button" class="btn btn-outline-light btn-sm rounded-pill" onclick="testApiConnection()">
+                                <i class="fa-solid fa-heart-pulse me-1"></i> សាកល្បងការភ្ជាប់
+                            </button>
+                            <button type="submit" class="btn btn-gold btn-sm rounded-pill px-4 fw-bold">
+                                <i class="fa-solid fa-plug me-1"></i> រក្សាទុក & ភ្ជាប់
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL 3B: CHANGE PASSWORD MODAL -->
+    <div class="modal fade" id="changePasswordModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered modal-sm">
+            <div class="modal-content glass-card border-0 text-white" style="background: rgba(15, 18, 26, 0.98);">
+                <div class="modal-header border-bottom border-secondary border-opacity-25">
+                    <h5 class="modal-title fw-bold text-gold"><i class="fa-solid fa-key me-2"></i>ប្តូរពាក្យសម្ងាត់</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body py-3">
+                    <form onsubmit="handleChangePassword(event)">
+                        <div class="mb-3">
+                            <label class="form-label text-gold small fw-bold">ពាក្យសម្ងាត់បច្ចុប្បន្ន</label>
+                            <input type="password" class="form-control bg-dark text-white border-secondary" id="cpCurrent" required autocomplete="current-password">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label text-gold small fw-bold">ពាក្យសម្ងាត់ថ្មី (យ៉ាងតិច ៦ តួ)</label>
+                            <input type="password" class="form-control bg-dark text-white border-secondary" id="cpNew" required minlength="6" autocomplete="new-password">
+                        </div>
+                        <button type="submit" class="btn btn-gold w-100 rounded-pill py-2 fw-bold">រក្សាទុក</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+
+    <!-- MODAL 4: SUGAR LEVEL SELECTION MODAL -->
+    <div class="modal fade" id="sugarModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content glass-card border-0 text-white" style="background: rgba(20, 22, 32, 0.98);">
+                <div class="modal-header border-bottom border-secondary border-opacity-25">
+                    <h5 class="modal-title fw-bold text-gold"><i class="fa-solid fa-sliders me-2"></i>ជ្រើសរើសកម្រិតស្ករ</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body py-3">
+                    <div class="d-flex align-items-center mb-3 gap-3 bg-dark bg-opacity-50 p-3 rounded-3 border border-secondary border-opacity-25">
+                        <img id="modalItemImg" src="" alt="" class="rounded-3" style="width: 65px; height: 65px; object-fit: cover;">
+                        <div>
+                            <h6 id="modalItemName" class="mb-1 text-white fw-bold fs-5"></h6>
+                            <span id="modalItemPrice" class="text-gold fw-bold fs-5"></span>
+                        </div>
+                    </div>
+
+                    <label class="form-label text-gold mb-2 fw-bold"><i class="fa-solid fa-cubes-stacked me-2"></i>កម្រិតស្ករ (Sugar Level)</label>
+                    
+                    <div class="d-grid gap-2">
+                        <input type="radio" class="btn-check" name="sugarLevel" id="sugar0" value="0%">
+                        <label class="btn btn-outline-light text-start py-2 d-flex justify-content-between align-items-center rounded-3 btn-sugar-option" for="sugar0">
+                            <span>0% (មិនដាក់ស្ករ / No Sugar)</span>
+                            <i class="fa-solid fa-ban opacity-50"></i>
+                        </label>
+
+                        <input type="radio" class="btn-check" name="sugarLevel" id="sugar30" value="30%">
+                        <label class="btn btn-outline-light text-start py-2 d-flex justify-content-between align-items-center rounded-3 btn-sugar-option" for="sugar30">
+                            <span>30% (ស្ករតិច / Less Sweet)</span>
+                            <i class="fa-solid fa-cubes opacity-50"></i>
+                        </label>
+
+                        <input type="radio" class="btn-check" name="sugarLevel" id="sugar50" value="50%" checked>
+                        <label class="btn btn-outline-light text-start py-2 d-flex justify-content-between align-items-center rounded-3 btn-sugar-option" for="sugar50">
+                            <span>50% (ស្ករល្មម / Medium Sweet)</span>
+                            <i class="fa-solid fa-cubes opacity-75"></i>
+                        </label>
+
+                        <input type="radio" class="btn-check" name="sugarLevel" id="sugar70" value="70%">
+                        <label class="btn btn-outline-light text-start py-2 d-flex justify-content-between align-items-center rounded-3 btn-sugar-option" for="sugar70">
+                            <span>70% (ស្ករច្រើន / Normal Sweet)</span>
+                            <i class="fa-solid fa-cubes"></i>
+                        </label>
+
+                        <input type="radio" class="btn-check" name="sugarLevel" id="sugar100" value="100%">
+                        <label class="btn btn-outline-light text-start py-2 d-flex justify-content-between align-items-center rounded-3 btn-sugar-option" for="sugar100">
+                            <span>100% (ស្ករពេញ / Extra Sweet)</span>
+                            <i class="fa-solid fa-cubes text-gold"></i>
+                        </label>
+                    </div>
+                </div>
+                <div class="modal-footer border-top border-secondary border-opacity-25">
+                    <button type="button" class="btn btn-secondary rounded-pill px-4" data-bs-dismiss="modal">បោះបង់</button>
+                    <button type="button" class="btn btn-gold rounded-pill px-4" id="confirmAddToCartBtn">
+                        <i class="fa-solid fa-cart-plus me-1"></i> បន្ថែមចូល Cart
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- OFFCANVAS CART DRAWER -->
+    <div class="offcanvas offcanvas-end" tabindex="-1" id="cartOffcanvas">
+        <div class="offcanvas-header border-bottom border-secondary border-opacity-25 py-3">
+            <h5 class="offcanvas-title fw-bold text-gold">
+                <i class="fa-solid fa-cart-shopping me-2"></i>កន្ត្រកទំនិញ កាហ្វេ ម្លប់ដូង
+            </h5>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="offcanvas"></button>
+        </div>
+        <div class="offcanvas-body d-flex flex-column justify-content-between">
+            <div id="cartItemsList" class="overflow-y-auto pe-1 mb-3">
+                <!-- Cart items list dynamically populated -->
+            </div>
+
+            <div class="border-top border-secondary border-opacity-25 pt-3">
+                <div class="row g-2 mb-3">
+                    <div class="col-7">
+                        <label class="form-label text-gold small fw-bold mb-1">ឈ្មោះអតិថិជន <span class="text-danger">*</span></label>
+                        <input type="text" id="cartCustomerName" class="form-control form-control-sm bg-dark text-white border-secondary" placeholder="ឧ. សុខា">
+                    </div>
+                    <div class="col-5">
+                        <label class="form-label text-gold small fw-bold mb-1">លេខតុ</label>
+                        <input type="text" id="cartTableNo" class="form-control form-control-sm bg-dark text-white border-secondary" placeholder="ឧ. តុ 02">
+                    </div>
+                </div>
+
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <span class="fs-5 text-secondary">តម្លៃសរុប (Total):</span>
+                    <span id="cartTotalPrice" class="fs-4 fw-bold text-gold">$0.00</span>
+                </div>
+                
+                <button class="btn btn-gold w-100 py-2 rounded-3 fs-6 fw-bold" onclick="checkoutCartAndSendToKds()">
+                    <i class="fa-solid fa-paper-plane me-2"></i>ទូទាត់ប្រាក់ & ផ្ញើការកម្ម៉ង់
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL 5: RECEIPT PRINTING -->
+    <div class="modal fade" id="receiptModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered modal-sm">
+            <div class="modal-content text-dark p-3" style="background: #fff; font-family: monospace;">
+                <div class="text-center border-bottom pb-2 mb-2">
+                    <h5 class="fw-bold mb-0">កាហ្វេ ម្លប់ដូង</h5>
+                    <small>MLOB DOUNG COFFEE - RECEIPT</small>
+                </div>
+                <div id="receiptContent"></div>
+                <div class="border-top pt-2 mt-2 text-center small">
+                    <p class="mb-1">សូមអរគុណ! សូមអញ្ជើញមកម្តងទៀត!</p>
+                </div>
+                <div class="no-print mt-3 d-flex gap-2">
+                    <button class="btn btn-secondary btn-sm w-50" data-bs-dismiss="modal">បិទ</button>
+                    <button class="btn btn-dark btn-sm w-50" onclick="window.print()"><i class="fa-solid fa-print me-1"></i> បោះពុម្ព</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL 6: CONFIRM DELETE MODAL -->
+    <div class="modal fade" id="confirmDeleteModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered modal-sm">
+            <div class="modal-content glass-card border-0 text-white" style="background: rgba(20, 22, 32, 0.98);">
+                <div class="modal-body text-center py-4">
+                    <i class="fa-solid fa-triangle-exclamation text-danger fa-3x mb-3"></i>
+                    <h5 class="fw-bold text-white mb-2">បញ្ជាក់ការលុបទំនិញ?</h5>
+                    <p class="text-secondary small mb-3" id="deleteConfirmText">តើអ្នកពិតជាចង់លុបទំនិញនេះចេញពីប្រព័ន្ធមែនទេ?</p>
+                    <div class="d-flex justify-content-center gap-2">
+                        <button type="button" class="btn btn-secondary btn-sm rounded-pill px-3" data-bs-dismiss="modal">បោះបង់</button>
+                        <button type="button" class="btn btn-danger btn-sm rounded-pill px-3" id="btnConfirmDelete">លុបចោល</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- TOAST NOTIFICATION CONTAINER -->
+    <div class="toast-container">
+        <div id="orderToast" class="toast align-items-center text-bg-warning border-0" role="alert" aria-live="assertive" aria-atomic="true">
+            <div class="d-flex">
+                <div class="toast-body fw-bold">
+                    <i class="fa-solid fa-bell me-2"></i> <span id="toastMsg">ការកម្ម៉ង់ថ្មីត្រូវបានបញ្ចូល!</span>
+                </div>
+                <button type="button" class="btn-close me-2 m-auto" data-bs-dismiss="toast"></button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+    <script>
+        // ----------------------------------------------------
+        // 0. API CLIENT (Backend connection)
+        // ----------------------------------------------------
+        const API_BASE = (localStorage.getItem('udom_api_base') || '').replace(/\/+$/, '');
+        let adminToken = sessionStorage.getItem('udom_admin_token');
+        let backendOnline = true;
+
+        function esc(v) {
+            return String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        }
+        function imgUrl(src) {
+            if (!src) return '';
+            return src.startsWith('/uploads/') ? API_BASE + src : src;
+        }
+
+        async function api(path, { method = 'GET', body, auth = false, form } = {}) {
+            const headers = {};
+            if (auth) {
+                if (!adminToken) throw Object.assign(new Error('តម្រូវឱ្យចូលប្រើជា Admin'), { status: 401 });
+                headers['Authorization'] = 'Bearer ' + adminToken;
+            }
+            let payload;
+            if (form) { payload = form; }
+            else if (body !== undefined) { headers['Content-Type'] = 'application/json'; payload = JSON.stringify(body); }
+
+            let res;
+            try {
+                res = await fetch(API_BASE + path, { method, headers, body: payload });
+            } catch (netErr) {
+                setBackendOnline(false);
+                throw Object.assign(new Error('មិនអាចភ្ជាប់ទៅ Backend បានទេ'), { status: 0 });
+            }
+            setBackendOnline(true);
+            let data = null;
+            try { data = await res.json(); } catch (_) {}
+            if (!res.ok) {
+                if (res.status === 401 && auth) {
+                    clearAdminSession();
+                    setAdminLoggedInState(false);
+                }
+                throw Object.assign(new Error((data && data.error) || ('កំហុស ' + res.status)), { status: res.status });
+            }
+            return data;
+        }
+
+        function setBackendOnline(ok) {
+            backendOnline = ok;
+            const el = document.getElementById('statDbMode');
+            if (el) { el.textContent = ok ? 'Backend API' : 'Offline'; el.className = 'fw-bold mb-0 mt-1 h5 ' + (ok ? 'text-info' : 'text-danger'); }
+        }
+        function clearAdminSession() { adminToken = null; sessionStorage.removeItem('udom_admin_token'); }
+
+        function mapOrder(o) {
+            return { ...o, timestamp: new Date(o.createdAt).toLocaleTimeString('en-US') };
+        }
+        
+        // Shared Database State
+        let products = [];
+        let orders = [];
+
+        
+        // Admin Auth State
+        let isAdminLoggedIn = false;
+
+        // Cart State
+        let cart = [];
+        let selectedProductForSugar = null;
+        let currentPosCategory = 'all';
+
+        // KDS State
+        let currentKdsFilter = 'all';
+        let currentKdsViewMode = 'grid';
+
+        // Modals & Toast Instances
+        let sugarModalInstance = null;
+        let productModalInstance = null;
+        let adminLoginModalInstance = null;
+        let apiConfigModalInstance = null;
+        let changePasswordModalInstance = null;
+        let receiptModalInstance = null;
+        let confirmDeleteModalInstance = null;
+        let toastInstance = null;
+
+        // Temporary Image Preview Data
+        let currentUploadedImageData = null;
+        let itemToDeleteId = null;
+
+        document.addEventListener('DOMContentLoaded', async () => {
+            // Initialize Modals
+            sugarModalInstance = new bootstrap.Modal(document.getElementById('sugarModal'));
+            productModalInstance = new bootstrap.Modal(document.getElementById('productFormModal'));
+            adminLoginModalInstance = new bootstrap.Modal(document.getElementById('adminLoginModal'));
+            apiConfigModalInstance = new bootstrap.Modal(document.getElementById('apiConfigModal'));
+            changePasswordModalInstance = new bootstrap.Modal(document.getElementById('changePasswordModal'));
+            receiptModalInstance = new bootstrap.Modal(document.getElementById('receiptModal'));
+            confirmDeleteModalInstance = new bootstrap.Modal(document.getElementById('confirmDeleteModal'));
+            toastInstance = new bootstrap.Toast(document.getElementById('orderToast'));
+
+            // Restore admin session (verify token with backend)
+            setAdminLoggedInState(false);
+            if (adminToken) {
+                try { await api('/api/auth/me', { auth: true }); setAdminLoggedInState(true); }
+                catch (_) { clearAdminSession(); setAdminLoggedInState(false); }
+            }
+
+            // Init Clock
+            updateClock();
+            setInterval(updateClock, 1000);
+
+            // Load data from Backend
+            await Promise.all([loadProductsFromDb(), refreshOrders()]);
+            renderPosProducts();
+            renderCart();
+            renderDashboard();
+            renderAdminTable();
+
+            // Keep multiple devices (POS / KDS / Admin) in sync
+            setInterval(async () => {
+                if (document.hidden) return;
+                await refreshOrders();
+                renderDashboard();
+            }, 5000);
+            setInterval(async () => {
+                if (document.hidden) return;
+                await loadProductsFromDb();
+                renderPosProducts();
+                renderAdminTable();
+            }, 30000);
+        });
+
+        // ----------------------------------------------------
+        // 1. CLOCK & NAVIGATION TABS
+        // ----------------------------------------------------
+        function updateClock() {
+            const now = new Date();
+            document.getElementById('clockDisplay').textContent = now.toLocaleTimeString('en-US');
+            document.getElementById('dateDisplay').textContent = now.toLocaleDateString('km-KH');
+        }
+
+        function switchTab(tab) {
+            const posSec = document.getElementById('posSection');
+            const kdsSec = document.getElementById('kdsSection');
+            const adminSec = document.getElementById('adminSection');
+
+            const btnPos = document.getElementById('btnTabPos');
+            const btnKds = document.getElementById('btnTabKds');
+            const btnAdmin = document.getElementById('btnTabAdmin');
+
+            posSec.classList.add('d-none');
+            kdsSec.classList.add('d-none');
+            adminSec.classList.add('d-none');
+
+            btnPos.className = 'btn btn-outline-gold rounded-pill px-3 py-2 fw-bold d-flex align-items-center gap-2';
+            btnKds.className = 'btn btn-outline-gold rounded-pill px-3 py-2 fw-bold d-flex align-items-center gap-2 position-relative';
+            btnAdmin.className = 'btn btn-outline-gold rounded-pill px-3 py-2 fw-bold d-flex align-items-center gap-2';
+
+            if (tab === 'pos') {
+                posSec.classList.remove('d-none');
+                btnPos.className = 'btn btn-gold rounded-pill px-3 py-2 fw-bold active d-flex align-items-center gap-2';
+                renderPosProducts();
+            } else if (tab === 'kds') {
+                kdsSec.classList.remove('d-none');
+                btnKds.className = 'btn btn-gold rounded-pill px-3 py-2 fw-bold active d-flex align-items-center gap-2 position-relative';
+                renderDashboard();
+            } else if (tab === 'admin') {
+                adminSec.classList.remove('d-none');
+                btnAdmin.className = 'btn btn-gold rounded-pill px-3 py-2 fw-bold active d-flex align-items-center gap-2';
+                renderAdminTable();
+            }
+        }
+
+        // ----------------------------------------------------
+        // 2. DATABASE ENGINE (BACKEND API)
+        // ----------------------------------------------------
+        async function loadProductsFromDb() {
+            try {
+                products = isAdminLoggedIn
+                    ? await api('/api/admin/products', { auth: true })
+                    : await api('/api/products');
+            } catch (err) {
+                if (err.status === 0) showToast('⚠️ ' + err.message);
+            }
+        }
+
+        async function refreshOrders() {
+            try {
+                orders = (await api('/api/orders')).map(mapOrder);
+            } catch (err) { /* offline indicator already set */ }
+        }
+
+        function openApiConfigModal() {
+            document.getElementById('apiBaseInput').value = API_BASE;
+            document.getElementById('apiTestResult').textContent = '';
+            apiConfigModalInstance.show();
+        }
+
+        async function testApiConnection() {
+            const base = document.getElementById('apiBaseInput').value.trim().replace(/\/+$/, '');
+            const out = document.getElementById('apiTestResult');
+            out.className = 'small mb-3 text-secondary';
+            out.textContent = 'កំពុងសាកល្បង...';
+            try {
+                const r = await fetch(base + '/api/health');
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                out.className = 'small mb-3 text-success';
+                out.textContent = '✔ ភ្ជាប់ Backend បានជោគជ័យ';
+            } catch (e) {
+                out.className = 'small mb-3 text-danger';
+                out.textContent = '✖ មិនអាចភ្ជាប់បានទេ៖ ' + e.message;
+            }
+        }
+
+        function saveApiConfig(e) {
+            e.preventDefault();
+            const base = document.getElementById('apiBaseInput').value.trim().replace(/\/+$/, '');
+            if (base) localStorage.setItem('udom_api_base', base); else localStorage.removeItem('udom_api_base');
+            clearAdminSession(); // token belongs to the previous backend
+            location.reload();
+        }
+
+        // ----------------------------------------------------
+        // 3. ADMIN AUTHENTICATION
+        // ----------------------------------------------------
+        function openAdminLoginModal() {
+            adminLoginModalInstance.show();
+        }
+
+        async function handleAdminLogin(e) {
+            e.preventDefault();
+            const username = document.getElementById('loginUsername').value.trim();
+            const password = document.getElementById('loginPassword').value;
+            try {
+                const res = await api('/api/auth/login', { method: 'POST', body: { username, password } });
+                adminToken = res.token;
+                sessionStorage.setItem('udom_admin_token', adminToken);
+                document.getElementById('loginPassword').value = '';
+                setAdminLoggedInState(true);
+                adminLoginModalInstance.hide();
+                await loadProductsFromDb();
+                renderAdminTable();
+                renderPosProducts();
+                showToast('ចូលប្រើប្រាស់ជា Admin ដោយជោគជ័យ!');
+            } catch (err) {
+                alert(err.message);
+            }
+        }
+
+        async function handleAdminLogout() {
+            clearAdminSession();
+            setAdminLoggedInState(false);
+            await loadProductsFromDb();
+            renderPosProducts();
+            showToast('បានចាកចេញពី Admin');
+        }
+
+        function openChangePasswordModal() {
+            document.getElementById('cpCurrent').value = '';
+            document.getElementById('cpNew').value = '';
+            changePasswordModalInstance.show();
+        }
+
+        async function handleChangePassword(e) {
+            e.preventDefault();
+            try {
+                await api('/api/auth/change-password', { method: 'POST', auth: true, body: {
+                    currentPassword: document.getElementById('cpCurrent').value,
+                    newPassword: document.getElementById('cpNew').value
+                }});
+                changePasswordModalInstance.hide();
+                showToast('បានប្តូរពាក្យសម្ងាត់ដោយជោគជ័យ!');
+            } catch (err) { alert(err.message); }
+        }
+
+        function setAdminLoggedInState(loggedIn) {
+            isAdminLoggedIn = loggedIn;
+            const navContainer = document.getElementById('adminAuthNav');
+            const lockBadge = document.getElementById('adminLockBadge');
+            const guardNotice = document.getElementById('adminGuardNotice');
+            const mainContent = document.getElementById('adminMainContent');
+
+            if (loggedIn) {
+                navContainer.innerHTML = `
+                    <div class="d-flex align-items-center gap-2">
+                        <span class="badge bg-gold text-dark"><i class="fa-solid fa-user-check me-1"></i> Admin</span>
+                        <button class="btn btn-sm btn-outline-danger rounded-pill px-2" onclick="handleAdminLogout()" title="Logout">
+                            <i class="fa-solid fa-power-off"></i>
+                        </button>
+                    </div>
+                `;
+                if (lockBadge) lockBadge.className = 'badge bg-success';
+                if (lockBadge) lockBadge.innerHTML = '<i class="fa-solid fa-check"></i>';
+                if (guardNotice) guardNotice.classList.add('d-none');
+                if (mainContent) mainContent.classList.remove('d-none');
+            } else {
+                navContainer.innerHTML = `
+                    <button class="btn btn-sm btn-outline-light rounded-pill px-3" onclick="openAdminLoginModal()">
+                        <i class="fa-solid fa-right-to-bracket me-1"></i> ចូលគណនី Admin
+                    </button>
+                `;
+                if (lockBadge) lockBadge.className = 'badge bg-secondary';
+                if (lockBadge) lockBadge.innerHTML = '<i class="fa-solid fa-lock"></i>';
+                if (guardNotice) guardNotice.classList.remove('d-none');
+                if (mainContent) mainContent.classList.add('d-none');
+            }
+        }
+
+        // ----------------------------------------------------
+        // 4. ADMIN PRODUCT CRUD SYSTEM & FILE UPLOAD
+        // ----------------------------------------------------
+        function renderAdminTable() {
+            if (!isAdminLoggedIn) return;
+
+            const searchQuery = document.getElementById('adminSearchInput').value.toLowerCase().trim();
+            const catFilter = document.getElementById('adminCategoryFilter').value;
+            const statusFilter = document.getElementById('adminStatusFilter').value;
+
+            // Stats update
+            document.getElementById('statTotalProducts').textContent = products.length;
+            document.getElementById('statActiveProducts').textContent = products.filter(p => p.status === 'active').length;
+            document.getElementById('statOutOfStock').textContent = products.filter(p => p.stock <= 0).length;
+
+            const filtered = products.filter(p => {
+                const matchesSearch = p.name.toLowerCase().includes(searchQuery) || (p.description && p.description.toLowerCase().includes(searchQuery));
+                const matchesCat = (catFilter === 'all') || (p.category === catFilter);
+                const matchesStatus = (statusFilter === 'all') || (p.status === statusFilter);
+                return matchesSearch && matchesCat && matchesStatus;
+            });
+
+            document.getElementById('adminProductCountBadge').textContent = filtered.length;
+
+            const tbody = document.getElementById('adminProductsTableBody');
+            if (filtered.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="7" class="text-center py-4 text-secondary">មិនទាន់មានទិន្នន័យទំនិញឡើយ</td></tr>`;
+                return;
+            }
+
+            tbody.innerHTML = filtered.map(p => `
+                <tr>
+                    <td>
+                        <img src="${esc(imgUrl(p.image) || 'https://via.placeholder.com/60')}" class="rounded-3" style="width: 50px; height: 50px; object-fit: cover;" alt="${esc(p.name)}" onerror="this.src='https://via.placeholder.com/50?text=No+Img'">
+                    </td>
+                    <td>
+                        <div class="fw-bold text-white">${esc(p.name)}</div>
+                        <small class="text-secondary text-truncate d-block" style="max-width: 200px;">${esc(p.description || '-')}</small>
+                    </td>
+                    <td><span class="badge bg-dark border border-secondary text-capitalize">${getCategoryLabel(p.category)}</span></td>
+                    <td class="fw-bold text-gold">$${parseFloat(p.price).toFixed(2)}</td>
+                    <td>
+                        <div class="d-flex align-items-center gap-1">
+                            <button class="btn btn-sm btn-outline-secondary py-0 px-2 text-white" onclick="adjustProductStock('${p.id}', -1)">-</button>
+                            <span class="fw-bold px-1 ${p.stock <= 0 ? 'text-danger' : (p.stock < 10 ? 'text-warning' : 'text-white')}">${p.stock}</span>
+                            <button class="btn btn-sm btn-outline-secondary py-0 px-2 text-white" onclick="adjustProductStock('${p.id}', 1)">+</button>
+                        </div>
+                    </td>
+                    <td>
+                        <button class="btn btn-sm ${p.status === 'active' ? 'btn-outline-success' : 'btn-outline-secondary'} rounded-pill" onclick="toggleProductStatus('${p.id}')">
+                            ${p.status === 'active' ? '<i class="fa-solid fa-eye me-1"></i>សកម្ម' : '<i class="fa-solid fa-eye-slash me-1"></i>អសកម្ម'}
+                        </button>
+                    </td>
+                    <td class="text-center">
+                        <div class="btn-group btn-group-sm">
+                            <button class="btn btn-outline-gold" onclick="openEditProductModal('${p.id}')" title="កែប្រែ">
+                                <i class="fa-solid fa-pen-to-square"></i>
+                            </button>
+                            <button class="btn btn-outline-danger" onclick="promptDeleteProduct('${p.id}')" title="លុប">
+                                <i class="fa-solid fa-trash"></i>
+                            </button>
+                        </div>
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        function getCategoryLabel(cat) {
+            switch(cat) {
+                case 'coffee': return 'កាហ្វេ';
+                case 'tea': return 'តែ & ឡាតេ';
+                case 'drink': return 'ភេសជ្ជៈ';
+                case 'bakery': return 'នំ & អាហារ';
+                default: return cat;
+            }
+        }
+
+        // Open Add Modal
+        function openAddProductModal() {
+            document.getElementById('productForm').reset();
+            document.getElementById('formProductId').value = '';
+            document.getElementById('productModalTitle').innerHTML = '<i class="fa-solid fa-box-open me-2"></i>បន្ថែមទំនិញថ្មី';
+            resetImagePreview();
+            productModalInstance.show();
+        }
+
+        // Open Edit Modal
+        function openEditProductModal(id) {
+            const p = products.find(item => item.id === id);
+            if (!p) return;
+
+            document.getElementById('formProductId').value = p.id;
+            document.getElementById('formProductName').value = p.name;
+            document.getElementById('formCategory').value = p.category;
+            document.getElementById('formPrice').value = p.price;
+            document.getElementById('formStock').value = p.stock;
+            document.getElementById('formStatus').value = p.status;
+            document.getElementById('formDescription').value = p.description || '';
+            document.getElementById('formImageUrl').value = (p.image || '').startsWith('/uploads/') ? '' : (p.image || '');
+
+            document.getElementById('productModalTitle').innerHTML = '<i class="fa-solid fa-pen-to-square me-2"></i>កែប្រែទំនិញ';
+
+            currentUploadedImageData = p.image || null;
+            if (p.image) {
+                showImagePreview(imgUrl(p.image));
+            } else {
+                resetImagePreview();
+            }
+
+            productModalInstance.show();
+        }
+
+        // Handling File Upload Preview (FileReader)
+        function handleImageFileSelect(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            if (file.size > 5 * 1024 * 1024) {
+                alert('ទំហំរូបភាពធំពេក! សូមជ្រើសរើសរូបភាពតូចជាង 5MB');
+                event.target.value = '';
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                currentUploadedImageData = e.target.result; // Base64 Data URL
+                showImagePreview(currentUploadedImageData);
+                document.getElementById('formImageUrl').value = ''; // clear url input
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function handleImageUrlInput(url) {
+            if (url.trim()) {
+                currentUploadedImageData = url.trim();
+                showImagePreview(url.trim());
+                document.getElementById('formImageFile').value = ''; // clear file input
+            } else {
+                resetImagePreview();
+            }
+        }
+
+        function showImagePreview(src) {
+            const placeholder = document.getElementById('previewPlaceholder');
+            const img = document.getElementById('previewImg');
+            placeholder.classList.add('d-none');
+            img.src = src;
+            img.classList.remove('d-none');
+        }
+
+        function resetImagePreview() {
+            currentUploadedImageData = null;
+            document.getElementById('previewPlaceholder').classList.remove('d-none');
+            const img = document.getElementById('previewImg');
+            img.src = '';
+            img.classList.add('d-none');
+        }
+
+        // Save Form (Add / Edit)
+        async function saveProductHandler(e) {
+            e.preventDefault();
+            if (!isAdminLoggedIn) return;
+
+            const id = document.getElementById('formProductId').value;
+            const name = document.getElementById('formProductName').value.trim();
+            const category = document.getElementById('formCategory').value;
+            const price = parseFloat(document.getElementById('formPrice').value);
+            const stock = parseInt(document.getElementById('formStock').value);
+            const status = document.getElementById('formStatus').value;
+            const description = document.getElementById('formDescription').value.trim();
+
+            if (!name || isNaN(price) || isNaN(stock)) {
+                alert('សូមបញ្ចូលទិន្នន័យឱ្យបានត្រឹមត្រូវ!');
+                return;
+            }
+
+            try {
+                // Image: uploaded file -> /api/admin/upload ; otherwise keep URL typed / existing image
+                let finalImage = (document.getElementById('formImageUrl').value || '').trim();
+                if (!finalImage && !document.getElementById('formImageFile').files.length && id) {
+                    const old = products.find(p => p.id === id);
+                    finalImage = old ? old.image : '';
+                }
+                const fileInput = document.getElementById('formImageFile');
+                if (fileInput.files.length > 0) {
+                    const fd = new FormData();
+                    fd.append('image', fileInput.files[0]);
+                    const up = await api('/api/admin/upload', { method: 'POST', auth: true, form: fd });
+                    finalImage = up.url;
+                }
+                if (!finalImage) finalImage = 'https://images.unsplash.com/photo-1517701604599-bb29b565090c?auto=format&fit=crop&w=400&q=80';
+
+                const productData = { name, category, price, stock, status, description, image: finalImage };
+                if (id) {
+                    await api('/api/admin/products/' + encodeURIComponent(id), { method: 'PUT', auth: true, body: productData });
+                } else {
+                    await api('/api/admin/products', { method: 'POST', auth: true, body: productData });
+                }
+
+                await loadProductsFromDb();
+                productModalInstance.hide();
+                renderAdminTable();
+                renderPosProducts();
+                showToast(id ? 'បានកែប្រែទំនិញដោយជោគជ័យ!' : 'បានបន្ថែមទំនិញថ្មីដោយជោគជ័យ!');
+            } catch (err) {
+                alert(err.message);
+            }
+        }
+
+        async function adjustProductStock(id, delta) {
+            try {
+                const updated = await api(`/api/admin/products/${encodeURIComponent(id)}/stock`, { method: 'POST', auth: true, body: { delta } });
+                const i = products.findIndex(p => p.id === id);
+                if (i > -1) products[i] = updated;
+                renderAdminTable();
+                renderPosProducts();
+            } catch (err) { alert(err.message); }
+        }
+
+        async function toggleProductStatus(id) {
+            const p = products.find(item => item.id === id);
+            if (!p) return;
+            try {
+                const updated = await api('/api/admin/products/' + encodeURIComponent(id), { method: 'PATCH', auth: true,
+                    body: { status: p.status === 'active' ? 'inactive' : 'active' } });
+                const i = products.findIndex(x => x.id === id);
+                if (i > -1) products[i] = updated;
+                renderAdminTable();
+                renderPosProducts();
+            } catch (err) { alert(err.message); }
+        }
+
+        function promptDeleteProduct(id) {
+            const p = products.find(item => item.id === id);
+            if (!p) return;
+            itemToDeleteId = id;
+            document.getElementById('deleteConfirmText').textContent = `តើអ្នកពិតជាចង់លុបទំនិញ "${esc(p.name)}" ចេញពីប្រព័ន្ធមែនទេ?`;
+            confirmDeleteModalInstance.show();
+        }
+
+        document.getElementById('btnConfirmDelete').addEventListener('click', async () => {
+            if (itemToDeleteId) {
+                try {
+                    await api('/api/admin/products/' + encodeURIComponent(itemToDeleteId), { method: 'DELETE', auth: true });
+                    products = products.filter(p => p.id !== itemToDeleteId);
+                    showToast('បានលុបទំនិញរួចរាល់!');
+                } catch (err) { alert(err.message); }
+                itemToDeleteId = null;
+                confirmDeleteModalInstance.hide();
+                renderAdminTable();
+                renderPosProducts();
+            }
+        });
+
+        // ----------------------------------------------------
+        // 5. PUBLIC POS CATALOG & CART
+        // ----------------------------------------------------
+        function filterCategory(category, btnElement) {
+            currentPosCategory = category;
+            document.querySelectorAll('#categoryFilters .category-btn').forEach(b => b.classList.remove('active'));
+            btnElement.classList.add('active');
+            renderPosProducts();
+        }
+
+        function renderPosProducts() {
+            const grid = document.getElementById('productsGrid');
+            const search = document.getElementById('posSearchInput').value.toLowerCase().trim();
+
+            // Filter active products for POS view
+            const filtered = products.filter(p => {
+                const isCat = (currentPosCategory === 'all') || (p.category === currentPosCategory);
+                const isSearch = p.name.toLowerCase().includes(search);
+                const isActive = p.status === 'active';
+                return isCat && isSearch && isActive;
+            });
+
+            if (filtered.length === 0) {
+                grid.innerHTML = `
+                    <div class="col-12 text-center py-5 text-secondary">
+                        <i class="fa-solid fa-box-open fs-1 mb-2 opacity-50"></i>
+                        <p>មិនមានទំនិញក្នុងប្រភេទទំនិញនេះទេ</p>
+                    </div>
+                `;
+                return;
+            }
+
+            grid.innerHTML = filtered.map(p => {
+                const isOut = p.stock <= 0;
+                return `
+                    <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                        <div class="card glass-card product-card text-white h-100 p-3 ${isOut ? 'out-of-stock' : ''}">
+                            <img src="${esc(imgUrl(p.image))}" class="card-img-top rounded-3 mb-2" style="height: 160px; object-fit: cover;" alt="${esc(p.name)}" onerror="this.src='https://via.placeholder.com/300x200?text=MLOB+DOUNG+COFFEE'">
+                            
+                            <div class="card-body p-0 d-flex flex-column justify-content-between">
+                                <div>
+                                    <div class="d-flex justify-content-between align-items-start gap-1 mb-1">
+                                        <h6 class="card-title fw-bold text-truncate mb-0" title="${esc(p.name)}">${esc(p.name)}</h6>
+                                        <span class="badge ${isOut ? 'bg-danger' : 'bg-success'} small">${isOut ? 'អស់ស្តុក' : 'ស្តុក: ' + p.stock}</span>
+                                    </div>
+                                    <p class="text-gold fw-bold fs-5 mb-2">$${parseFloat(p.price).toFixed(2)}</p>
+                                </div>
+
+                                <button class="btn btn-gold w-100 rounded-pill btn-sm fw-bold py-2 ${isOut ? 'disabled opacity-50' : ''}" onclick="openSugarModalForProduct('${p.id}')">
+                                    <i class="fa-solid fa-cart-plus me-1"></i> ${isOut ? 'អស់ពីស្តុក' : 'បន្ថែមក្នុង Cart'}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function openSugarModalForProduct(productId) {
+            selectedProductForSugar = products.find(p => p.id === productId);
+            if (!selectedProductForSugar || selectedProductForSugar.stock <= 0) return;
+
+            document.getElementById('modalItemName').textContent = selectedProductForSugar.name;
+            document.getElementById('modalItemPrice').textContent = '$' + parseFloat(selectedProductForSugar.price).toFixed(2);
+            document.getElementById('modalItemImg').src = imgUrl(selectedProductForSugar.image);
+            document.getElementById('sugar50').checked = true;
+
+            sugarModalInstance.show();
+        }
+
+        document.getElementById('confirmAddToCartBtn').addEventListener('click', () => {
+            if (!selectedProductForSugar) return;
+            const selectedSugar = document.querySelector('input[name="sugarLevel"]:checked').value;
+
+            const existingIndex = cart.findIndex(i => i.id === selectedProductForSugar.id && i.sugar === selectedSugar);
+            
+            // Check stock limit
+            const currentCartQty = existingIndex > -1 ? cart[existingIndex].quantity : 0;
+            if (currentCartQty + 1 > selectedProductForSugar.stock) {
+                alert(`សូមអភ័យទោស! ស្តុកទំនិញនេះមានត្រឹមតែ ${selectedProductForSugar.stock} ប៉ុណ្ណោះ`);
+                return;
+            }
+
+            if (existingIndex > -1) {
+                cart[existingIndex].quantity += 1;
+            } else {
+                cart.push({
+                    id: selectedProductForSugar.id,
+                    name: selectedProductForSugar.name,
+                    price: parseFloat(selectedProductForSugar.price),
+                    img: imgUrl(selectedProductForSugar.image),
+                    sugar: selectedSugar,
+                    quantity: 1
+                });
+            }
+
+            sugarModalInstance.hide();
+            renderCart();
+            showToast(`បានបន្ថែម ${selectedProductForSugar.name} ចូល Cart!`);
+        });
+
+        function renderCart() {
+            const container = document.getElementById('cartItemsList');
+            const badge = document.getElementById('cartBadge');
+            const totalEl = document.getElementById('cartTotalPrice');
+
+            let totalCount = 0;
+            let totalPrice = 0;
+
+            if (cart.length === 0) {
+                container.innerHTML = `
+                    <div class="text-center py-5 text-secondary">
+                        <i class="fa-solid fa-basket-shopping fs-1 mb-2 opacity-50"></i>
+                        <p>មិនទាន់មានទំនិញក្នុងកន្ត្រកនៅឡើយទេ</p>
+                    </div>
+                `;
+            } else {
+                container.innerHTML = cart.map((item, index) => {
+                    const itemTotal = item.price * item.quantity;
+                    totalCount += item.quantity;
+                    totalPrice += itemTotal;
+
+                    return `
+                        <div class="p-2 mb-2 rounded bg-dark bg-opacity-50 border border-secondary border-opacity-25 d-flex gap-2 align-items-center">
+                            <img src="${item.img}" class="rounded-2" style="width: 50px; height: 50px; object-fit: cover;" alt="">
+                            <div class="flex-grow-1">
+                                <div class="d-flex justify-content-between align-items-start">
+                                    <span class="fw-bold text-white small text-truncate" style="max-width: 140px;">${esc(item.name)}</span>
+                                    <button class="btn btn-sm text-danger p-0 ms-1" onclick="removeCartItem(${index})"><i class="fa-solid fa-xmark"></i></button>
+                                </div>
+                                <div class="my-1"><span class="sugar-badge">ស្ករ ${esc(item.sugar)}</span></div>
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <span class="text-gold fw-bold small">$${itemTotal.toFixed(2)}</span>
+                                    <div class="d-flex align-items-center gap-1 bg-dark rounded px-2 border border-secondary border-opacity-25">
+                                        <button class="btn btn-sm text-white p-0" onclick="changeCartQty(${index}, -1)">-</button>
+                                        <span class="small px-2">${item.quantity}</span>
+                                        <button class="btn btn-sm text-white p-0" onclick="changeCartQty(${index}, 1)">+</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            }
+
+            badge.textContent = totalCount;
+            totalEl.textContent = '$' + totalPrice.toFixed(2);
+        }
+
+        function changeCartQty(index, delta) {
+            const item = cart[index];
+            const p = products.find(prod => prod.id === item.id);
+
+            if (delta > 0 && p && (item.quantity + delta > p.stock)) {
+                alert(`ស្តុកទំនិញមានត្រឹមតែ ${p.stock} ប៉ុណ្ណោះ!`);
+                return;
+            }
+
+            cart[index].quantity += delta;
+            if (cart[index].quantity <= 0) cart.splice(index, 1);
+            renderCart();
+        }
+
+        function removeCartItem(index) {
+            cart.splice(index, 1);
+            renderCart();
+        }
+
+        // Checkout Cart Action
+        async function checkoutCartAndSendToKds() {
+            if (cart.length === 0) {
+                alert('សូមបន្ថែមទំនិញចូលកន្ត្រកជាមុនសិន!');
+                return;
+            }
+
+            const customerName = document.getElementById('cartCustomerName').value.trim();
+            const tableNo = document.getElementById('cartTableNo').value.trim();
+
+            let newOrder;
+            try {
+                // Server recalculates prices/total and deducts stock atomically
+                const res = await api('/api/orders', { method: 'POST', body: {
+                    customerName, tableNo,
+                    items: cart.map(i => ({ id: i.id, name: i.name, quantity: i.quantity, sugar: i.sugar }))
+                }});
+                newOrder = mapOrder(res);
+            } catch (err) {
+                alert(err.message);
+                await loadProductsFromDb();   // stock may have changed
+                renderPosProducts();
+                renderCart();
+                return;
+            }
+
+            orders.unshift(newOrder);
+
+            // Reset Cart & Form
+            cart = [];
+            document.getElementById('cartCustomerName').value = '';
+            document.getElementById('cartTableNo').value = '';
+            renderCart();
+
+            // Hide Offcanvas
+            const offcanvasEl = document.getElementById('cartOffcanvas');
+            const bsOffcanvas = bootstrap.Offcanvas.getInstance(offcanvasEl);
+            if (bsOffcanvas) bsOffcanvas.hide();
+
+            await loadProductsFromDb();       // pick up deducted stock
+            renderDashboard();
+            renderPosProducts();
+            renderAdminTable();
+            showToast(`ការកម្ម៉ង់ ${newOrder.id} ត្រូវបានផ្ញើទៅ KDS រួចរាល់!`);
+        }
+
+        // ----------------------------------------------------
+        // 6. KDS ORDER MANAGEMENT PIPELINE & RECEIPT
+        // ----------------------------------------------------
+        function renderDashboard() {
+            updateMetrics();
+            const filtered = getFilteredKdsOrders();
+
+            if (currentKdsViewMode === 'grid') {
+                renderKdsGridCards(filtered);
+            } else {
+                renderKdsTableRows(filtered);
+            }
+        }
+
+        function getFilteredKdsOrders() {
+            const query = document.getElementById('kdsSearchInput').value.toLowerCase().trim();
+            return orders.filter(o => {
+                const matchesStatus = (currentKdsFilter === 'all') || (o.status === currentKdsFilter);
+                const matchesQuery = o.customerName.toLowerCase().includes(query) ||
+                                     o.tableNo.toLowerCase().includes(query) ||
+                                     o.id.toLowerCase().includes(query);
+                return matchesStatus && matchesQuery;
+            });
+        }
+
+        function updateMetrics() {
+            const total = orders.length;
+            const pending = orders.filter(o => o.status === 'pending').length;
+            const preparing = orders.filter(o => o.status === 'preparing').length;
+            const completed = orders.filter(o => o.status === 'completed').length;
+            const revenue = orders.filter(o => o.status === 'completed').reduce((sum, o) => sum + o.total, 0);
+
+            document.getElementById('metricTotal').textContent = total;
+            document.getElementById('metricPending').textContent = pending;
+            document.getElementById('metricPreparing').textContent = preparing;
+            document.getElementById('metricCompleted').textContent = completed;
+            document.getElementById('metricRevenue').textContent = '$' + revenue.toFixed(2);
+
+            document.getElementById('cntAll').textContent = total;
+            document.getElementById('kdsPendingBadge').textContent = pending;
+        }
+
+        function renderKdsGridCards(items) {
+            const container = document.getElementById('ordersGridContainer');
+            if (items.length === 0) {
+                container.innerHTML = `
+                    <div class="col-12 text-center py-5 text-secondary">
+                        <i class="fa-solid fa-inbox fs-1 mb-2 opacity-50"></i>
+                        <p>មិនទាន់មានទិន្នន័យការកម្ម៉ង់នៅឡើយទេ</p>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = items.map(o => {
+                const itemsList = o.items.map(i => `
+                    <div class="d-flex justify-content-between align-items-center mb-1">
+                        <div>
+                            <span class="fw-bold text-white small">${esc(i.name)}</span>
+                            <span class="text-gold fw-bold small">x${i.quantity}</span>
+                        </div>
+                        <span class="sugar-badge">ស្ករ ${esc(i.sugar)}</span>
+                    </div>
+                `).join('');
+
+                return `
+                    <div class="col-12 col-md-6 col-lg-4 col-xl-3">
+                        <div class="glass-card order-card status-${o.status} p-3 h-100 d-flex flex-column justify-content-between">
+                            <div>
+                                <div class="d-flex justify-content-between align-items-start border-bottom border-secondary border-opacity-25 pb-2 mb-2">
+                                    <div>
+                                        <span class="badge bg-gold text-dark fw-bold me-1">${esc(o.tableNo)}</span>
+                                        <span class="text-secondary small">${o.id}</span>
+                                    </div>
+                                    ${getStatusBadgeHtml(o.status)}
+                                </div>
+
+                                <div class="mb-3">
+                                    <h5 class="fw-bold text-white mb-0"><i class="fa-solid fa-user text-gold me-2"></i>${esc(o.customerName)}</h5>
+                                    <small class="text-secondary"><i class="fa-regular fa-clock me-1"></i>${o.timestamp}</small>
+                                </div>
+
+                                <div class="bg-dark bg-opacity-50 p-2 rounded-3 mb-3 border border-secondary border-opacity-25">
+                                    ${itemsList}
+                                </div>
+                            </div>
+
+                            <div>
+                                <div class="d-flex justify-content-between align-items-center pt-2 border-top border-secondary border-opacity-25 mb-3">
+                                    <span class="text-secondary small">តម្លៃសរុប:</span>
+                                    <span class="fs-4 fw-bold text-gold">$${o.total.toFixed(2)}</span>
+                                </div>
+
+                                <div class="d-flex gap-1">
+                                    ${getActionButtonsHtml(o)}
+                                    <button class="btn btn-sm btn-outline-light" onclick="openReceiptModal('${o.id}')" title="មើលវិក្កយបត្រ">
+                                        <i class="fa-solid fa-print"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function renderKdsTableRows(items) {
+            const tbody = document.getElementById('ordersTableBody');
+            if (items.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="8" class="text-center py-4 text-secondary">មិនទាន់មានទិន្នន័យការកម្ម៉ង់នៅឡើយទេ</td></tr>`;
+                return;
+            }
+
+            tbody.innerHTML = items.map(o => {
+                const itemsList = o.items.map(i => `
+                    <div>• ${esc(i.name)} <strong class="text-gold">x${i.quantity}</strong> <span class="sugar-badge ms-1">ស្ករ ${esc(i.sugar)}</span></div>
+                `).join('');
+
+                return `
+                    <tr>
+                        <td class="fw-bold text-gold">${o.id}</td>
+                        <td class="fw-bold">${esc(o.customerName)}</td>
+                        <td><span class="badge bg-secondary">${esc(o.tableNo)}</span></td>
+                        <td>${itemsList}</td>
+                        <td class="fw-bold text-gold">$${o.total.toFixed(2)}</td>
+                        <td class="small text-secondary">${o.timestamp}</td>
+                        <td>${getStatusBadgeHtml(o.status)}</td>
+                        <td>
+                            <div class="d-flex justify-content-center gap-1">
+                                ${getActionButtonsHtml(o)}
+                                <button class="btn btn-sm btn-outline-light" onclick="openReceiptModal('${o.id}')"><i class="fa-solid fa-print"></i></button>
+                            </div>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function getStatusBadgeHtml(status) {
+            switch (status) {
+                case 'pending': return `<span class="badge status-badge-pending"><i class="fa-solid fa-clock me-1"></i>កំពុងរង់ចាំ</span>`;
+                case 'preparing': return `<span class="badge status-badge-preparing"><i class="fa-solid fa-spinner me-1"></i>កំពុងរៀបចំ</span>`;
+                case 'completed': return `<span class="badge status-badge-completed"><i class="fa-solid fa-check me-1"></i>រួចរាល់</span>`;
+                case 'cancelled': return `<span class="badge status-badge-cancelled"><i class="fa-solid fa-xmark me-1"></i>លុបចោល</span>`;
+                default: return '';
+            }
+        }
+
+        function getActionButtonsHtml(order) {
+            if (order.status === 'pending') {
+                return `
+                    <button class="btn btn-sm btn-info w-100 fw-bold" onclick="changeOrderStatus('${order.id}', 'preparing')">
+                        <i class="fa-solid fa-spinner me-1"></i>ចាប់ផ្តើមរៀបចំ
+                    </button>
+                    <button class="btn btn-sm btn-outline-danger" onclick="changeOrderStatus('${order.id}', 'cancelled')" title="លុបចោល">
+                        <i class="fa-solid fa-xmark"></i>
+                    </button>
+                `;
+            } else if (order.status === 'preparing') {
+                return `
+                    <button class="btn btn-sm btn-success w-100 fw-bold" onclick="changeOrderStatus('${order.id}', 'completed')">
+                        <i class="fa-solid fa-check me-1"></i>រៀបចំរួចរាល់
+                    </button>
+                `;
+            } else {
+                return `<button class="btn btn-sm btn-outline-secondary w-100 disabled">បានបញ្ចប់</button>`;
+            }
+        }
+
+        async function changeOrderStatus(orderId, newStatus) {
+            try {
+                const updated = mapOrder(await api(`/api/orders/${encodeURIComponent(orderId)}/status`, { method: 'PATCH', body: { status: newStatus } }));
+                const i = orders.findIndex(o => o.id === orderId);
+                if (i > -1) orders[i] = updated;
+                if (newStatus === 'cancelled') { await loadProductsFromDb(); renderPosProducts(); renderAdminTable(); }
+                renderDashboard();
+            } catch (err) { alert(err.message); }
+        }
+
+        function filterStatus(status, btnElement) {
+            currentKdsFilter = status;
+            document.querySelectorAll('#filterButtons button').forEach(b => b.classList.remove('active'));
+            btnElement.classList.add('active');
+            renderDashboard();
+        }
+
+        function setViewMode(mode) {
+            currentKdsViewMode = mode;
+            const gridContainer = document.getElementById('ordersGridContainer');
+            const tableContainer = document.getElementById('ordersTableContainer');
+            const btnGrid = document.getElementById('btnGridView');
+            const btnTable = document.getElementById('btnTableView');
+
+            if (mode === 'grid') {
+                gridContainer.classList.remove('d-none');
+                tableContainer.classList.add('d-none');
+                btnGrid.className = 'btn btn-gold active';
+                btnTable.className = 'btn btn-outline-gold';
+            } else {
+                gridContainer.classList.add('d-none');
+                tableContainer.classList.remove('d-none');
+                btnGrid.className = 'btn btn-outline-gold';
+                btnTable.className = 'btn btn-gold active';
+            }
+            renderDashboard();
+        }
+
+        function openReceiptModal(orderId) {
+            const o = orders.find(item => item.id === orderId);
+            if (!o) return;
+
+            const itemsHtml = o.items.map(i => `
+                <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+                    <div>${esc(i.name)} x${i.quantity}<br><small>(${esc(i.sugar)})</small></div>
+                    <div>$${(i.price * i.quantity).toFixed(2)}</div>
+                </div>
+            `).join('');
+
+            document.getElementById('receiptContent').innerHTML = `
+                <div style="margin-bottom:8px; font-size:12px;">
+                    <div><strong>លេខវិក្កយបត្រ:</strong> ${o.id}</div>
+                    <div><strong>ឈ្មោះអតិថិជន:</strong> ${esc(o.customerName)}</div>
+                    <div><strong>លេខតុ:</strong> ${esc(o.tableNo)}</div>
+                    <div><strong>ម៉ោង:</strong> ${o.timestamp}</div>
+                </div>
+                <hr style="border-top:1px dashed #000; margin:8px 0;">
+                ${itemsHtml}
+                <hr style="border-top:1px dashed #000; margin:8px 0;">
+                <div style="display:flex; justify-content:space-between; font-weight:bold; font-size:14px;">
+                    <span>សរុប (TOTAL):</span>
+                    <span>$${o.total.toFixed(2)}</span>
+                </div>
+            `;
+
+            receiptModalInstance.show();
+        }
+
+        // Helper Toast Notification
+        function showToast(message) {
+            document.getElementById('toastMsg').textContent = message;
+            toastInstance.show();
+        }
+    </script>
+</body>
+</html>
