@@ -286,9 +286,14 @@ app.get('/api/products', (req, res) => {
   res.json(rows.map(productOut));
 });
 
+// Limit order spam from the public customer screen
+const orderLimiter = rateLimit({ windowMs: 60 * 1000, max: 15, standardHeaders: true, legacyHeaders: false,
+  message: { error: 'កម្ម៉ង់ញឹកពេក សូមរង់ចាំបន្តិច' } });
+
 // Create an order from the cart. Prices/totals are computed on the server,
 // stock is checked and deducted atomically.
-app.post('/api/orders', (req, res) => {
+// NOTE: this is the ONLY public order endpoint. Listing / updating orders is admin-only.
+app.post('/api/orders', orderLimiter, (req, res) => {
   const customerName = String(req.body.customerName ?? '').trim().slice(0, 80) || 'អតិថិជនទូទៅ';
   const tableNo = String(req.body.tableNo ?? '').trim().slice(0, 40) || 'តុទូទៅ';
   const items = Array.isArray(req.body.items) ? req.body.items : [];
@@ -321,38 +326,6 @@ app.post('/api/orders', (req, res) => {
 
   const seq = create();
   res.status(201).json(loadOrders('WHERE seq = ?', [seq])[0]);
-});
-
-// KDS (kitchen display) — used by the Orders tab, same open access as the original UI
-app.get('/api/orders', (req, res) => {
-  const { status } = req.query;
-  if (status && status !== 'all') {
-    if (!ORDER_STATUSES.includes(status)) throw new HttpError(400, 'status មិនត្រឹមត្រូវ');
-    return res.json(loadOrders('WHERE status = ?', [status]));
-  }
-  res.json(loadOrders('WHERE date(created_at) >= date(\'now\', \'-7 day\')'));
-});
-
-app.patch('/api/orders/:id/status', (req, res) => {
-  const seq = seqFromOrderId(req.params.id);
-  const status = req.body.status;
-  if (!ORDER_STATUSES.includes(status)) throw new HttpError(400, 'status មិនត្រឹមត្រូវ');
-  // Cancelling restores stock (once)
-  const updateStatus = tx(() => {
-    const o = db.prepare('SELECT * FROM orders WHERE seq = ?').get(seq);
-    if (!o) throw new HttpError(404, 'រកមិនឃើញការកម្ម៉ង់');
-    if (o.status === status) return;
-    if (status === 'cancelled') {
-      for (const it of db.prepare('SELECT product_id, quantity FROM order_items WHERE order_seq = ?').all(seq)) {
-        db.prepare('UPDATE products SET stock = stock + ? WHERE id = ?').run(it.quantity, it.product_id);
-      }
-    } else if (o.status === 'cancelled') {
-      throw new HttpError(409, 'ការកម្ម៉ង់ដែលបានបោះបង់ មិនអាចបើកឡើងវិញបានទេ');
-    }
-    db.prepare('UPDATE orders SET status = ? WHERE seq = ?').run(status, seq);
-  });
-  updateStatus();
-  res.json(loadOrders('WHERE seq = ?', [seq])[0]);
 });
 
 // ---------------- Admin API (JWT required) ----------------
@@ -432,10 +405,37 @@ admin.get('/stats', (req, res) => {
   });
 });
 
+// ---------------- Admin: Orders (JWT required) ----------------
 admin.get('/orders', (req, res) => {
+  const { status } = req.query;
   const limit = Math.min(Number(req.query.limit) || 200, 1000);
-  const rows = loadOrders();
-  res.json(rows.slice(0, limit));
+  if (status && status !== 'all') {
+    if (!ORDER_STATUSES.includes(status)) throw new HttpError(400, 'status មិនត្រឹមត្រូវ');
+    return res.json(loadOrders('WHERE status = ?', [status]).slice(0, limit));
+  }
+  res.json(loadOrders("WHERE date(created_at) >= date('now', '-7 day')").slice(0, limit));
+});
+
+admin.patch('/orders/:id/status', (req, res) => {
+  const seq = seqFromOrderId(req.params.id);
+  const status = req.body.status;
+  if (!ORDER_STATUSES.includes(status)) throw new HttpError(400, 'status មិនត្រឹមត្រូវ');
+  // Cancelling restores stock (once)
+  const updateStatus = tx(() => {
+    const o = db.prepare('SELECT * FROM orders WHERE seq = ?').get(seq);
+    if (!o) throw new HttpError(404, 'រកមិនឃើញការកម្ម៉ង់');
+    if (o.status === status) return;
+    if (status === 'cancelled') {
+      for (const it of db.prepare('SELECT product_id, quantity FROM order_items WHERE order_seq = ?').all(seq)) {
+        db.prepare('UPDATE products SET stock = stock + ? WHERE id = ?').run(it.quantity, it.product_id);
+      }
+    } else if (o.status === 'cancelled') {
+      throw new HttpError(409, 'ការកម្ម៉ង់ដែលបានបោះបង់ មិនអាចបើកឡើងវិញបានទេ');
+    }
+    db.prepare('UPDATE orders SET status = ? WHERE seq = ?').run(status, seq);
+  });
+  updateStatus();
+  res.json(loadOrders('WHERE seq = ?', [seq])[0]);
 });
 
 app.use('/api/admin', admin);
