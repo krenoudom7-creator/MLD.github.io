@@ -263,7 +263,7 @@
         <!-- Category & Search Bar -->
         <div class="glass-card p-3 mb-4 d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
             <div>
-                <h4 class="fw-bold text-gold mb-1"><i class="fa-solid fa-boxes-stacked me-2"></i>កម្មង់ទំនិញពី កាហ្វេ ម្លប់ដូង</h4>
+                <h4 class="fw-bold text-gold mb-1"><i class="fa-solid fa-boxes-stacked me-2"></i>កម្មង់ទំនិញ កាហ្វេ ម្លប់ដូង</h4>
                 <p class="text-secondary small mb-0">ជ្រើសរើសទំនិញ ឬភេសជ្ជៈ ដើម្បីបន្ថែមចូលក្នុងកន្ត្រក និងធ្វើការកម្ម៉ង់</p>
             </div>
             
@@ -778,6 +778,11 @@
                             <span>100% (ស្ករពេញ / Extra Sweet)</span>
                             <i class="fa-solid fa-cubes text-gold"></i>
                         </label>
+                    </div>
+                    <div class="mt-3">
+                        <label for="itemNote" class="form-label text-gold mb-2 fw-bold"><i class="fa-solid fa-pen-to-square me-2"></i>កំណត់ចំណាំ (Note) <span class="text-secondary fw-normal small">- មិនចាំបាច់</span></label>
+                        <textarea id="itemNote" class="form-control bg-dark text-white border-secondary" rows="2" maxlength="100" placeholder="ឧ. ទឹកកកតិច, ដាក់ទឹកដោះគោបន្ថែម, កែវតូច…"></textarea>
+                        <div class="text-end small text-secondary mt-1"><span id="itemNoteCount">0</span>/100</div>
                     </div>
                 </div>
                 <div class="modal-footer border-top border-secondary border-opacity-25">
@@ -1506,6 +1511,8 @@
             document.getElementById('modalItemPrice').textContent = '$' + parseFloat(selectedProductForSugar.price).toFixed(2);
             document.getElementById('modalItemImg').src = imgUrl(selectedProductForSugar.image);
             document.getElementById('sugar50').checked = true;
+            document.getElementById('itemNote').value = '';
+            document.getElementById('itemNoteCount').textContent = '0';
 
             sugarModalInstance.show();
         }
@@ -1514,7 +1521,8 @@
             if (!selectedProductForSugar) return;
             const selectedSugar = document.querySelector('input[name="sugarLevel"]:checked').value;
 
-            const existingIndex = cart.findIndex(i => i.id === selectedProductForSugar.id && i.sugar === selectedSugar);
+            const note = document.getElementById('itemNote').value.replace(/\s+/g, ' ').trim().slice(0, 100);
+            const existingIndex = cart.findIndex(i => i.id === selectedProductForSugar.id && i.sugar === selectedSugar && (i.note || '') === note);
             
             // Check stock limit
             const currentCartQty = existingIndex > -1 ? cart[existingIndex].quantity : 0;
@@ -1532,6 +1540,7 @@
                     price: parseFloat(selectedProductForSugar.price),
                     img: imgUrl(selectedProductForSugar.image),
                     sugar: selectedSugar,
+                    note: note,
                     quantity: 1
                 });
             }
@@ -1539,6 +1548,10 @@
             sugarModalInstance.hide();
             renderCart();
             showToast(`បានបន្ថែម ${selectedProductForSugar.name} ចូល Cart!`);
+        });
+
+        document.getElementById('itemNote').addEventListener('input', e => {
+            document.getElementById('itemNoteCount').textContent = e.target.value.length;
         });
 
         function renderCart() {
@@ -1571,6 +1584,7 @@
                                     <button class="btn btn-sm text-danger p-0 ms-1" onclick="removeCartItem(${index})"><i class="fa-solid fa-xmark"></i></button>
                                 </div>
                                 <div class="my-1"><span class="sugar-badge">ស្ករ ${esc(item.sugar)}</span></div>
+                                ${item.note ? `<div class="small text-warning" style="word-break:break-word"><i class="fa-regular fa-note-sticky me-1"></i>${esc(item.note)}</div>` : ''}
                                 <div class="d-flex justify-content-between align-items-center">
                                     <span class="text-gold fw-bold small">$${itemTotal.toFixed(2)}</span>
                                     <div class="d-flex align-items-center gap-1 bg-dark rounded px-2 border border-secondary border-opacity-25">
@@ -1623,7 +1637,7 @@
                 // Server recalculates prices/total and deducts stock atomically
                 const res = await api('/api/orders', { method: 'POST', body: {
                     customerName, tableNo,
-                    items: cart.map(i => ({ id: i.id, name: i.name, quantity: i.quantity, sugar: i.sugar }))
+                    items: cart.map(i => ({ id: i.id, name: i.name, quantity: i.quantity, sugar: i.sugar, note: i.note || '' }))
                 }});
                 newOrder = mapOrder(res);
             } catch (err) {
@@ -1717,6 +1731,7 @@
                         </div>
                         <span class="sugar-badge">ស្ករ ${esc(i.sugar)}</span>
                     </div>
+                    ${i.note ? `<div class="small text-warning mb-2 ps-2" style="word-break:break-word">📝 ${esc(i.note)}</div>` : ''}
                 `).join('');
 
                 return `
@@ -1769,7 +1784,7 @@
 
             tbody.innerHTML = items.map(o => {
                 const itemsList = o.items.map(i => `
-                    <div>• ${esc(i.name)} <strong class="text-gold">x${i.quantity}</strong> <span class="sugar-badge ms-1">ស្ករ ${esc(i.sugar)}</span></div>
+                    <div>• ${esc(i.name)} <strong class="text-gold">x${i.quantity}</strong> <span class="sugar-badge ms-1">ស្ករ ${esc(i.sugar)}</span>${i.note ? `<div class="small text-warning ps-3">📝 ${esc(i.note)}</div>` : ''}</div>
                 `).join('');
 
                 return `
@@ -1867,7 +1882,7 @@
 
             const itemsHtml = o.items.map(i => `
                 <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
-                    <div>${esc(i.name)} x${i.quantity}<br><small>(${esc(i.sugar)})</small></div>
+                    <div>${esc(i.name)} x${i.quantity}<br><small>(${esc(i.sugar)})</small>${i.note ? `<br><small>📝 ${esc(i.note)}</small>` : ''}</div>
                     <div>$${(i.price * i.quantity).toFixed(2)}</div>
                 </div>
             `).join('');
