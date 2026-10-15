@@ -107,6 +107,11 @@ if (!db.prepare('PRAGMA table_info(order_items)').all().some((c) => c.name === '
   db.exec("ALTER TABLE order_items ADD COLUMN note TEXT NOT NULL DEFAULT ''");
 }
 
+// Migration: per-product discount percent (0-100)
+if (!db.prepare('PRAGMA table_info(products)').all().some((c) => c.name === 'discount')) {
+  db.exec('ALTER TABLE products ADD COLUMN discount INTEGER NOT NULL DEFAULT 0');
+}
+
 // Seed admin (first run only)
 if (db.prepare('SELECT COUNT(*) AS n FROM admins').get().n === 0) {
   const u = process.env.ADMIN_USERNAME || 'admin';
@@ -142,8 +147,12 @@ class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
 }
 
+// Price after discount, rounded to cents
+const finalPrice = (price, discount) => Math.round(price * (100 - (discount || 0))) / 100;
+
 const productOut = (r) => ({
   id: r.id, name: r.name, category: r.category, price: r.price, stock: r.stock,
+  discount: r.discount || 0, finalPrice: finalPrice(r.price, r.discount),
   status: r.status, description: r.description, image: r.image, created_at: r.created_at,
 });
 
@@ -184,6 +193,11 @@ function parseProduct(body, { partial = false } = {}) {
     const price = Number(body.price);
     if (!Number.isFinite(price) || price < 0 || price > 100000) throw new HttpError(400, 'តម្លៃមិនត្រឹមត្រូវ');
     out.price = Math.round(price * 100) / 100;
+  }
+  if (!partial || has('discount')) {
+    const discount = Number(body.discount ?? 0);
+    if (!Number.isInteger(discount) || discount < 0 || discount > 100) throw new HttpError(400, 'ការបញ្ចុះតម្លៃត្រូវតែនៅចន្លោះ 0-100%');
+    out.discount = discount;
   }
   if (!partial || has('stock')) {
     const stock = Number(body.stock);
@@ -316,8 +330,9 @@ app.post('/api/orders', orderLimiter, (req, res) => {
       if (decStock.run(qty, p.id, qty).changes === 0) throw new HttpError(409, `ទំនិញ "${p.name}" អស់ស្តុក ឬមិនគ្រប់ចំនួន (នៅសល់ ${p.stock})`);
       const sugar = String(it.sugar ?? '').slice(0, 20);
       const note = String(it.note ?? '').replace(/\s+/g, ' ').trim().slice(0, 100);
-      insItem.run(seq, p.id, p.name, p.price, qty, sugar, note);
-      total += p.price * qty;
+      const unit = finalPrice(p.price, p.discount); // discounted unit price, computed on the server
+      insItem.run(seq, p.id, p.name, unit, qty, sugar, note);
+      total += unit * qty;
     }
     total = Math.round(total * 100) / 100;
     setTotal.run(total, seq);
@@ -340,8 +355,8 @@ admin.get('/products', (req, res) => {
 admin.post('/products', (req, res) => {
   const data = parseProduct(req.body);
   const id = 'prod-' + Date.now() + '-' + crypto.randomBytes(2).toString('hex');
-  db.prepare(`INSERT INTO products (id, name, category, price, stock, status, description, image)
-              VALUES (@id, @name, @category, @price, @stock, @status, @description, @image)`).run({ id, ...data });
+  db.prepare(`INSERT INTO products (id, name, category, price, discount, stock, status, description, image)
+              VALUES (@id, @name, @category, @price, @discount, @stock, @status, @description, @image)`).run({ id, ...data });
   res.status(201).json(productOut(db.prepare('SELECT * FROM products WHERE id = ?').get(id)));
 });
 
@@ -349,7 +364,7 @@ admin.put('/products/:id', (req, res) => {
   const existing = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
   if (!existing) throw new HttpError(404, 'រកមិនឃើញទំនិញ');
   const data = parseProduct(req.body);
-  db.prepare(`UPDATE products SET name=@name, category=@category, price=@price, stock=@stock,
+  db.prepare(`UPDATE products SET name=@name, category=@category, price=@price, discount=@discount, stock=@stock,
               status=@status, description=@description, image=@image WHERE id=@id`).run({ id: req.params.id, ...data });
   res.json(productOut(db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id)));
 });
