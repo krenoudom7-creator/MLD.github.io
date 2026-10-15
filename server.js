@@ -102,6 +102,11 @@ CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 CREATE INDEX IF NOT EXISTS idx_items_order ON order_items(order_seq);
 `);
 
+// Migration: per-item customer note (older databases lack this column)
+if (!db.prepare('PRAGMA table_info(order_items)').all().some((c) => c.name === 'note')) {
+  db.exec("ALTER TABLE order_items ADD COLUMN note TEXT NOT NULL DEFAULT ''");
+}
+
 // Seed admin (first run only)
 if (db.prepare('SELECT COUNT(*) AS n FROM admins').get().n === 0) {
   const u = process.env.ADMIN_USERNAME || 'admin';
@@ -145,7 +150,7 @@ const productOut = (r) => ({
 function loadOrders(whereSql = '', params = []) {
   const rows = db.prepare(`SELECT * FROM orders ${whereSql} ORDER BY seq DESC`).all(...params);
   if (!rows.length) return [];
-  const itemsStmt = db.prepare('SELECT name, price, quantity, sugar FROM order_items WHERE order_seq = ? ORDER BY id');
+  const itemsStmt = db.prepare('SELECT name, price, quantity, sugar, note FROM order_items WHERE order_seq = ? ORDER BY id');
   return rows.map((o) => ({
     id: 'ORD-' + (1000 + o.seq),
     customerName: o.customer_name,
@@ -292,7 +297,7 @@ app.post('/api/orders', (req, res) => {
   const getProduct = db.prepare('SELECT * FROM products WHERE id = ?');
   const decStock = db.prepare('UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?');
   const insOrder = db.prepare('INSERT INTO orders (customer_name, table_no, total) VALUES (?, ?, 0)');
-  const insItem = db.prepare('INSERT INTO order_items (order_seq, product_id, name, price, quantity, sugar) VALUES (?, ?, ?, ?, ?, ?)');
+  const insItem = db.prepare('INSERT INTO order_items (order_seq, product_id, name, price, quantity, sugar, note) VALUES (?, ?, ?, ?, ?, ?, ?)');
   const setTotal = db.prepare('UPDATE orders SET total = ? WHERE seq = ?');
 
   const create = tx(() => {
@@ -305,7 +310,8 @@ app.post('/api/orders', (req, res) => {
       if (!p || p.status !== 'active') throw new HttpError(409, `ទំនិញ "${it.name ?? it.id}" មិនមានលក់ទៀតទេ`);
       if (decStock.run(qty, p.id, qty).changes === 0) throw new HttpError(409, `ទំនិញ "${p.name}" អស់ស្តុក ឬមិនគ្រប់ចំនួន (នៅសល់ ${p.stock})`);
       const sugar = String(it.sugar ?? '').slice(0, 20);
-      insItem.run(seq, p.id, p.name, p.price, qty, sugar);
+      const note = String(it.note ?? '').replace(/\s+/g, ' ').trim().slice(0, 100);
+      insItem.run(seq, p.id, p.name, p.price, qty, sugar, note);
       total += p.price * qty;
     }
     total = Math.round(total * 100) / 100;
