@@ -250,14 +250,10 @@
                 </div>
             </a>
 
-            <!-- Mode Switcher Tabs -->
+            <!-- Mode Switcher Tabs (Orders now live inside Admin) -->
             <div id="navTabs" class="d-flex flex-wrap align-items-center gap-2 my-2 my-lg-0">
                 <button class="btn btn-gold rounded-pill px-3 py-2 fw-bold active d-flex align-items-center gap-2" id="btnTabPos" onclick="switchTab('pos')">
                     <i class="fa-solid fa-store"></i> ហាងទំនិញ (POS)
-                </button>
-                <button class="btn btn-outline-gold rounded-pill px-3 py-2 fw-bold d-flex align-items-center gap-2 position-relative" id="btnTabKds" onclick="switchTab('kds')">
-                    <i class="fa-solid fa-list-check"></i> ការកម្ម៉ង់ (Orders)
-                    <span id="kdsPendingBadge" class="badge rounded-pill bg-danger" style="font-size: 0.75rem;">0</span>
                 </button>
                 <button class="btn btn-outline-gold rounded-pill px-3 py-2 fw-bold d-flex align-items-center gap-2" id="btnTabAdmin" onclick="switchTab('admin')">
                     <i class="fa-solid fa-user-shield"></i> ប្រព័ន្ធគ្រប់គ្រង (Admin)
@@ -321,121 +317,7 @@
         </div>
     </div>
 
-    <!-- SECTION 2: ORDER MANAGEMENT SYSTEM (KDS) VIEW -->
-    <div id="kdsSection" class="container-fluid px-4 py-4 d-none">
-
-        <!-- Metrics Dashboard Row -->
-        <div class="row g-3 mb-4">
-            <div class="col-6 col-md-4 col-xl-2.4 flex-fill">
-                <div class="glass-card p-3 d-flex align-items-center justify-content-between">
-                    <div>
-                        <span class="text-secondary small fw-bold">ការកម្ម៉ង់សរុប</span>
-                        <h3 class="fw-bold text-white mb-0 mt-1" id="metricTotal">0</h3>
-                    </div>
-                    <div class="rounded-circle bg-primary bg-opacity-25 p-3 text-primary fs-4">
-                        <i class="fa-solid fa-receipt"></i>
-                    </div>
-                </div>
-            </div>
-
-            <div class="col-6 col-md-4 col-xl-2.4 flex-fill">
-                <div class="glass-card p-3 d-flex align-items-center justify-content-between">
-                    <div>
-                        <span class="text-warning small fw-bold">កំពុងរង់ចាំ (Pending)</span>
-                        <h3 class="fw-bold text-warning mb-0 mt-1" id="metricPending">0</h3>
-                    </div>
-                    <div class="rounded-circle bg-warning bg-opacity-25 p-3 text-warning fs-4">
-                        <i class="fa-solid fa-hourglass-half"></i>
-                    </div>
-                </div>
-            </div>
-
-            <div class="col-6 col-md-4 col-xl-2.4 flex-fill">
-                <div class="glass-card p-3 d-flex align-items-center justify-content-between">
-                    <div>
-                        <span class="text-info small fw-bold">កំពុងរៀបចំ (Preparing)</span>
-                        <h3 class="fw-bold text-info mb-0 mt-1" id="metricPreparing">0</h3>
-                    </div>
-                    <div class="rounded-circle bg-info bg-opacity-25 p-3 text-info fs-4">
-                        <i class="fa-solid fa-fire-burner"></i>
-                    </div>
-                </div>
-            </div>
-
-            <div class="col-6 col-md-4 col-xl-2.4 flex-fill">
-                <div class="glass-card p-3 d-flex align-items-center justify-content-between">
-                    <div>
-                        <span class="text-success small fw-bold">រួចរាល់ (Completed)</span>
-                        <h3 class="fw-bold text-success mb-0 mt-1" id="metricCompleted">0</h3>
-                    </div>
-                    <div class="rounded-circle bg-success bg-opacity-25 p-3 text-success fs-4">
-                        <i class="fa-solid fa-circle-check"></i>
-                    </div>
-                </div>
-            </div>
-
-            <div class="col-12 col-md-4 col-xl-2.4 flex-fill">
-                <div class="glass-card p-3 d-flex align-items-center justify-content-between">
-                    <div>
-                        <span class="text-gold small fw-bold">ចំណូលសរុប (Revenue)</span>
-                        <h3 class="fw-bold text-gold mb-0 mt-1" id="metricRevenue">$0.00</h3>
-                    </div>
-                    <div class="rounded-circle bg-gold bg-opacity-25 p-3 text-gold fs-4">
-                        <i class="fa-solid fa-sack-dollar"></i>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Filter and Search Controls -->
-        <div class="glass-card p-3 mb-4 d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
-            <div class="d-flex flex-wrap gap-2" id="filterButtons">
-                <button class="btn btn-outline-light rounded-pill btn-sm px-3 active" onclick="filterStatus('all', this)">ទាំងអស់ (<span id="cntAll">0</span>)</button>
-                <button class="btn btn-outline-warning rounded-pill btn-sm px-3" onclick="filterStatus('pending', this)"><i class="fa-solid fa-clock me-1"></i>កំពុងរង់ចាំ</button>
-                <button class="btn btn-outline-info rounded-pill btn-sm px-3" onclick="filterStatus('preparing', this)"><i class="fa-solid fa-spinner me-1"></i>កំពុងរៀបចំ</button>
-                <button class="btn btn-outline-success rounded-pill btn-sm px-3" onclick="filterStatus('completed', this)"><i class="fa-solid fa-check me-1"></i>រួចរាល់</button>
-                <button class="btn btn-outline-danger rounded-pill btn-sm px-3" onclick="filterStatus('cancelled', this)"><i class="fa-solid fa-xmark me-1"></i>លុបចោល</button>
-            </div>
-
-            <div class="d-flex flex-wrap align-items-center gap-2">
-                <div class="input-group input-group-sm" style="max-width: 220px;">
-                    <span class="input-group-text bg-dark border-secondary text-secondary"><i class="fa-solid fa-magnifying-glass"></i></span>
-                    <input type="text" id="kdsSearchInput" class="form-control bg-dark text-white border-secondary" placeholder="ស្វែងរកឈ្មោះ/តុ..." onkeyup="renderDashboard()">
-                </div>
-
-                <div class="btn-group btn-group-sm" role="group">
-                    <button id="btnGridView" class="btn btn-gold active" onclick="setViewMode('grid')" title="មើលជា Cards"><i class="fa-solid fa-grip"></i></button>
-                    <button id="btnTableView" class="btn btn-outline-gold" onclick="setViewMode('table')" title="មើលជា តារាង"><i class="fa-solid fa-list-ul"></i></button>
-                </div>
-            </div>
-        </div>
-
-        <!-- Orders Display Container -->
-        <div class="row g-3" id="ordersGridContainer"></div>
-
-        <div class="glass-card p-3 d-none" id="ordersTableContainer">
-            <div class="table-responsive">
-                <table class="table table-dark custom-table align-middle mb-0">
-                    <thead>
-                        <tr>
-                            <th># លេខកូដ</th>
-                            <th>ឈ្មោះអតិថិជន</th>
-                            <th>លេខតុ</th>
-                            <th>មុខទំនិញ</th>
-                            <th>តម្លៃសរុប</th>
-                            <th>ពេលវេលា</th>
-                            <th>ស្ថានភាព</th>
-                            <th class="text-center">សកម្មភាព</th>
-                        </tr>
-                    </thead>
-                    <tbody id="ordersTableBody"></tbody>
-                </table>
-            </div>
-        </div>
-
-    </div>
-
-    <!-- SECTION 3: ADMIN PRODUCT MANAGEMENT DASHBOARD -->
+    <!-- SECTION 2: ADMIN DASHBOARD (Products + Orders) -->
     <div id="adminSection" class="container-fluid px-4 py-4 d-none">
         
         <!-- Admin Restricted Guard Message (If Not Logged In) -->
@@ -444,7 +326,7 @@
                 <i class="fa-solid fa-shield-halved fa-4x"></i>
             </div>
             <h3 class="fw-bold text-gold mb-2">តម្រូវឱ្យចូលប្រើប្រាស់ជា Admin</h3>
-            <p class="text-secondary mb-4">សូមចូលប្រើប្រាស់គណនី Admin ដើម្បីគ្រប់គ្រងទំនិញ បន្ថែម កែប្រែ ឬលុបទំនិញក្នុងប្រព័ន្ធ។</p>
+            <p class="text-secondary mb-4">សូមចូលប្រើប្រាស់គណនី Admin ដើម្បីគ្រប់គ្រងទំនិញ និងការកម្ម៉ង់ក្នុងប្រព័ន្ធ។</p>
             <button class="btn btn-gold px-4 py-2 rounded-pill fw-bold" onclick="openAdminLoginModal()">
                 <i class="fa-solid fa-right-to-bracket me-2"></i>ចូលប្រព័ន្ធ Admin (Login)
             </button>
@@ -452,129 +334,259 @@
 
         <!-- Admin Content Area (If Logged In) -->
         <div id="adminMainContent">
-            
-            <!-- Header Bar -->
-            <div class="glass-card p-4 mb-4 d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
-                <div>
-                    <div class="d-flex align-items-center gap-2">
-                        <h4 class="fw-bold text-gold mb-0"><i class="fa-solid fa-list-check me-2"></i>ប្រព័ន្ធគ្រប់គ្រងទំនិញ (Product Management System)</h4>
-                        <span class="badge bg-success"><i class="fa-solid fa-circle-check me-1"></i> Admin Active</span>
-                    </div>
-                    <p class="text-secondary small mb-0 mt-1">គ្រប់គ្រងទំនិញ បង្កើតថ្មី កែប្រែតម្លៃ ស្តុក ស្ថានភាព និងភ្ជាប់ជាមួយ Backend API</p>
-                </div>
 
-                <div class="d-flex flex-wrap gap-2">
-                    <button class="btn btn-outline-gold rounded-pill px-3 py-2 fw-bold" onclick="openApiConfigModal()">
-                        <i class="fa-solid fa-database me-1"></i> ការកំណត់ Backend API
-                    </button>
-                    <button class="btn btn-outline-gold rounded-pill px-3 py-2 fw-bold" onclick="openChangePasswordModal()">
-                        <i class="fa-solid fa-key me-1"></i> ប្តូរពាក្យសម្ងាត់
-                    </button>
-                    <button class="btn btn-gold rounded-pill px-3 py-2 fw-bold" onclick="openAddProductModal()">
-                        <i class="fa-solid fa-circle-plus me-1"></i> បន្ថែមទំនិញថ្មី
-                    </button>
-                </div>
+            <!-- Sub tabs: Products / Orders -->
+            <div class="d-flex gap-2 mb-4">
+                <button id="adminSubProducts" class="btn btn-gold rounded-pill px-4 fw-bold" onclick="switchAdminSub('products')">
+                    <i class="fa-solid fa-boxes-stacked me-1"></i> ទំនិញ
+                </button>
+                <button id="adminSubOrders" class="btn btn-outline-gold rounded-pill px-4 fw-bold position-relative" onclick="switchAdminSub('orders')">
+                    <i class="fa-solid fa-list-check me-1"></i> ការកម្ម៉ង់
+                    <span id="kdsPendingBadge" class="badge rounded-pill bg-danger ms-1" style="font-size: 0.75rem;">0</span>
+                </button>
             </div>
 
-            <!-- Admin Product Stats Cards -->
-            <div class="row g-3 mb-4">
-                <div class="col-6 col-md-3">
-                    <div class="glass-card p-3 d-flex align-items-center justify-content-between">
-                        <div>
-                            <span class="text-secondary small fw-bold">ទំនិញសរុប</span>
-                            <h3 class="fw-bold text-white mb-0 mt-1" id="statTotalProducts">0</h3>
+            <!-- PANE 1: PRODUCTS -->
+            <div id="adminProductsPane">
+
+                <!-- Header Bar -->
+                <div class="glass-card p-4 mb-4 d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
+                    <div>
+                        <div class="d-flex align-items-center gap-2">
+                            <h4 class="fw-bold text-gold mb-0"><i class="fa-solid fa-list-check me-2"></i>ប្រព័ន្ធគ្រប់គ្រងទំនិញ (Product Management System)</h4>
+                            <span class="badge bg-success"><i class="fa-solid fa-circle-check me-1"></i> Admin Active</span>
                         </div>
-                        <div class="rounded-circle bg-gold bg-opacity-25 p-3 text-gold fs-4">
-                            <i class="fa-solid fa-boxes-stacked"></i>
+                        <p class="text-secondary small mb-0 mt-1">គ្រប់គ្រងទំនិញ បង្កើតថ្មី កែប្រែតម្លៃ ស្តុក ស្ថានភាព និងភ្ជាប់ជាមួយ Backend API</p>
+                    </div>
+
+                    <div class="d-flex flex-wrap gap-2">
+                        <button class="btn btn-outline-gold rounded-pill px-3 py-2 fw-bold" onclick="openApiConfigModal()">
+                            <i class="fa-solid fa-database me-1"></i> ការកំណត់ Backend API
+                        </button>
+                        <button class="btn btn-outline-gold rounded-pill px-3 py-2 fw-bold" onclick="openChangePasswordModal()">
+                            <i class="fa-solid fa-key me-1"></i> ប្តូរពាក្យសម្ងាត់
+                        </button>
+                        <button class="btn btn-gold rounded-pill px-3 py-2 fw-bold" onclick="openAddProductModal()">
+                            <i class="fa-solid fa-circle-plus me-1"></i> បន្ថែមទំនិញថ្មី
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Admin Product Stats Cards -->
+                <div class="row g-3 mb-4">
+                    <div class="col-6 col-md-3">
+                        <div class="glass-card p-3 d-flex align-items-center justify-content-between">
+                            <div>
+                                <span class="text-secondary small fw-bold">ទំនិញសរុប</span>
+                                <h3 class="fw-bold text-white mb-0 mt-1" id="statTotalProducts">0</h3>
+                            </div>
+                            <div class="rounded-circle bg-gold bg-opacity-25 p-3 text-gold fs-4">
+                                <i class="fa-solid fa-boxes-stacked"></i>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="col-6 col-md-3">
+                        <div class="glass-card p-3 d-flex align-items-center justify-content-between">
+                            <div>
+                                <span class="text-success small fw-bold">ទំនិញសកម្ម (Active)</span>
+                                <h3 class="fw-bold text-success mb-0 mt-1" id="statActiveProducts">0</h3>
+                            </div>
+                            <div class="rounded-circle bg-success bg-opacity-25 p-3 text-success fs-4">
+                                <i class="fa-solid fa-eye"></i>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="col-6 col-md-3">
+                        <div class="glass-card p-3 d-flex align-items-center justify-content-between">
+                            <div>
+                                <span class="text-danger small fw-bold">អស់ពីស្តុក (Out of Stock)</span>
+                                <h3 class="fw-bold text-danger mb-0 mt-1" id="statOutOfStock">0</h3>
+                            </div>
+                            <div class="rounded-circle bg-danger bg-opacity-25 p-3 text-danger fs-4">
+                                <i class="fa-solid fa-triangle-exclamation"></i>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="col-6 col-md-3">
+                        <div class="glass-card p-3 d-flex align-items-center justify-content-between">
+                            <div>
+                                <span class="text-info small fw-bold">ប្រភពទិន្នន័យ DB</span>
+                                <h5 class="fw-bold text-info mb-0 mt-1" id="statDbMode">Backend API</h5>
+                            </div>
+                            <div class="rounded-circle bg-info bg-opacity-25 p-3 text-info fs-4">
+                                <i class="fa-solid fa-server"></i>
+                            </div>
                         </div>
                     </div>
                 </div>
 
-                <div class="col-6 col-md-3">
-                    <div class="glass-card p-3 d-flex align-items-center justify-content-between">
-                        <div>
-                            <span class="text-success small fw-bold">ទំនិញសកម្ម (Active)</span>
-                            <h3 class="fw-bold text-success mb-0 mt-1" id="statActiveProducts">0</h3>
+                <!-- Admin Filters & Search -->
+                <div class="glass-card p-3 mb-4 d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
+                    <div class="d-flex flex-wrap align-items-center gap-2">
+                        <div class="input-group input-group-sm" style="max-width: 250px;">
+                            <span class="input-group-text bg-dark border-secondary text-secondary"><i class="fa-solid fa-magnifying-glass"></i></span>
+                            <input type="text" id="adminSearchInput" class="form-control bg-dark text-white border-secondary" placeholder="ស្វែងរកឈ្មោះ ឬប្រភេទ..." onkeyup="renderAdminTable()">
                         </div>
-                        <div class="rounded-circle bg-success bg-opacity-25 p-3 text-success fs-4">
-                            <i class="fa-solid fa-eye"></i>
-                        </div>
+
+                        <select id="adminCategoryFilter" class="form-select form-select-sm bg-dark text-white border-secondary" style="width: auto;" onchange="renderAdminTable()">
+                            <option value="all">គ្រប់ប្រភេទទាំងអស់</option>
+                            <option value="coffee">កាហ្វេ (Coffee)</option>
+                            <option value="tea">តែ (Tea)</option>
+                            <option value="drink">ភេសជ្ជៈ (Drink)</option>
+                            <option value="bakery">នំ & អាហារ (Bakery/Food)</option>
+                        </select>
+
+                        <select id="adminStatusFilter" class="form-select form-select-sm bg-dark text-white border-secondary" style="width: auto;" onchange="renderAdminTable()">
+                            <option value="all">គ្រប់ស្ថានភាព</option>
+                            <option value="active">សកម្ម (Active)</option>
+                            <option value="inactive">អសកម្ម (Inactive)</option>
+                        </select>
+                    </div>
+
+                    <div class="text-secondary small">
+                        បង្ហាញទំនិញសរុប: <span id="adminProductCountBadge" class="fw-bold text-gold">0</span>
                     </div>
                 </div>
 
-                <div class="col-6 col-md-3">
-                    <div class="glass-card p-3 d-flex align-items-center justify-content-between">
-                        <div>
-                            <span class="text-danger small fw-bold">អស់ពីស្តុក (Out of Stock)</span>
-                            <h3 class="fw-bold text-danger mb-0 mt-1" id="statOutOfStock">0</h3>
-                        </div>
-                        <div class="rounded-circle bg-danger bg-opacity-25 p-3 text-danger fs-4">
-                            <i class="fa-solid fa-triangle-exclamation"></i>
-                        </div>
+                <!-- Admin Products Table -->
+                <div class="glass-card p-3 mb-4">
+                    <div class="table-responsive">
+                        <table class="table table-dark custom-table align-middle mb-0">
+                            <thead>
+                                <tr>
+                                    <th style="width: 70px;">រូបភាព</th>
+                                    <th>ឈ្មោះទំនិញ</th>
+                                    <th>ប្រភេទ</th>
+                                    <th>តម្លៃ ($ USD)</th>
+                                    <th>ស្តុក (Qty)</th>
+                                    <th>ស្ថានភាព</th>
+                                    <th class="text-center" style="width: 180px;">សកម្មភាព</th>
+                                </tr>
+                            </thead>
+                            <tbody id="adminProductsTableBody">
+                                <!-- Dynamic Table Rows -->
+                            </tbody>
+                        </table>
                     </div>
                 </div>
 
-                <div class="col-6 col-md-3">
-                    <div class="glass-card p-3 d-flex align-items-center justify-content-between">
-                        <div>
-                            <span class="text-info small fw-bold">ប្រភពទិន្នន័យ DB</span>
-                            <h5 class="fw-bold text-info mb-0 mt-1" id="statDbMode">Backend API</h5>
-                        </div>
-                        <div class="rounded-circle bg-info bg-opacity-25 p-3 text-info fs-4">
-                            <i class="fa-solid fa-server"></i>
-                        </div>
-                    </div>
-                </div>
             </div>
 
-            <!-- Admin Filters & Search -->
-            <div class="glass-card p-3 mb-4 d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
-                <div class="d-flex flex-wrap align-items-center gap-2">
-                    <div class="input-group input-group-sm" style="max-width: 250px;">
-                        <span class="input-group-text bg-dark border-secondary text-secondary"><i class="fa-solid fa-magnifying-glass"></i></span>
-                        <input type="text" id="adminSearchInput" class="form-control bg-dark text-white border-secondary" placeholder="ស្វែងរកឈ្មោះ ឬប្រភេទ..." onkeyup="renderAdminTable()">
+            <!-- PANE 2: ORDERS (moved from the old public KDS tab) -->
+            <div id="adminOrdersPane" class="d-none">
+
+                <!-- Metrics Dashboard Row -->
+                <div class="row g-3 mb-4">
+                    <div class="col-6 col-md-4 col-xl-2.4 flex-fill">
+                        <div class="glass-card p-3 d-flex align-items-center justify-content-between">
+                            <div>
+                                <span class="text-secondary small fw-bold">ការកម្ម៉ង់សរុប</span>
+                                <h3 class="fw-bold text-white mb-0 mt-1" id="metricTotal">0</h3>
+                            </div>
+                            <div class="rounded-circle bg-primary bg-opacity-25 p-3 text-primary fs-4">
+                                <i class="fa-solid fa-receipt"></i>
+                            </div>
+                        </div>
                     </div>
 
-                    <select id="adminCategoryFilter" class="form-select form-select-sm bg-dark text-white border-secondary" style="width: auto;" onchange="renderAdminTable()">
-                        <option value="all">គ្រប់ប្រភេទទាំងអស់</option>
-                        <option value="coffee">កាហ្វេ (Coffee)</option>
-                        <option value="tea">តែ (Tea)</option>
-                        <option value="drink">ភេសជ្ជៈ (Drink)</option>
-                        <option value="bakery">នំ & អាហារ (Bakery/Food)</option>
-                    </select>
+                    <div class="col-6 col-md-4 col-xl-2.4 flex-fill">
+                        <div class="glass-card p-3 d-flex align-items-center justify-content-between">
+                            <div>
+                                <span class="text-warning small fw-bold">កំពុងរង់ចាំ (Pending)</span>
+                                <h3 class="fw-bold text-warning mb-0 mt-1" id="metricPending">0</h3>
+                            </div>
+                            <div class="rounded-circle bg-warning bg-opacity-25 p-3 text-warning fs-4">
+                                <i class="fa-solid fa-hourglass-half"></i>
+                            </div>
+                        </div>
+                    </div>
 
-                    <select id="adminStatusFilter" class="form-select form-select-sm bg-dark text-white border-secondary" style="width: auto;" onchange="renderAdminTable()">
-                        <option value="all">គ្រប់ស្ថានភាព</option>
-                        <option value="active">សកម្ម (Active)</option>
-                        <option value="inactive">អសកម្ម (Inactive)</option>
-                    </select>
+                    <div class="col-6 col-md-4 col-xl-2.4 flex-fill">
+                        <div class="glass-card p-3 d-flex align-items-center justify-content-between">
+                            <div>
+                                <span class="text-info small fw-bold">កំពុងរៀបចំ (Preparing)</span>
+                                <h3 class="fw-bold text-info mb-0 mt-1" id="metricPreparing">0</h3>
+                            </div>
+                            <div class="rounded-circle bg-info bg-opacity-25 p-3 text-info fs-4">
+                                <i class="fa-solid fa-fire-burner"></i>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="col-6 col-md-4 col-xl-2.4 flex-fill">
+                        <div class="glass-card p-3 d-flex align-items-center justify-content-between">
+                            <div>
+                                <span class="text-success small fw-bold">រួចរាល់ (Completed)</span>
+                                <h3 class="fw-bold text-success mb-0 mt-1" id="metricCompleted">0</h3>
+                            </div>
+                            <div class="rounded-circle bg-success bg-opacity-25 p-3 text-success fs-4">
+                                <i class="fa-solid fa-circle-check"></i>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="col-12 col-md-4 col-xl-2.4 flex-fill">
+                        <div class="glass-card p-3 d-flex align-items-center justify-content-between">
+                            <div>
+                                <span class="text-gold small fw-bold">ចំណូលសរុប (Revenue)</span>
+                                <h3 class="fw-bold text-gold mb-0 mt-1" id="metricRevenue">$0.00</h3>
+                            </div>
+                            <div class="rounded-circle bg-gold bg-opacity-25 p-3 text-gold fs-4">
+                                <i class="fa-solid fa-sack-dollar"></i>
+                            </div>
+                        </div>
+                    </div>
                 </div>
 
-                <div class="text-secondary small">
-                    បង្ហាញទំនិញសរុប: <span id="adminProductCountBadge" class="fw-bold text-gold">0</span>
-                </div>
-            </div>
+                <!-- Filter and Search Controls -->
+                <div class="glass-card p-3 mb-4 d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
+                    <div class="d-flex flex-wrap gap-2" id="filterButtons">
+                        <button class="btn btn-outline-light rounded-pill btn-sm px-3 active" onclick="filterStatus('all', this)">ទាំងអស់ (<span id="cntAll">0</span>)</button>
+                        <button class="btn btn-outline-warning rounded-pill btn-sm px-3" onclick="filterStatus('pending', this)"><i class="fa-solid fa-clock me-1"></i>កំពុងរង់ចាំ</button>
+                        <button class="btn btn-outline-info rounded-pill btn-sm px-3" onclick="filterStatus('preparing', this)"><i class="fa-solid fa-spinner me-1"></i>កំពុងរៀបចំ</button>
+                        <button class="btn btn-outline-success rounded-pill btn-sm px-3" onclick="filterStatus('completed', this)"><i class="fa-solid fa-check me-1"></i>រួចរាល់</button>
+                        <button class="btn btn-outline-danger rounded-pill btn-sm px-3" onclick="filterStatus('cancelled', this)"><i class="fa-solid fa-xmark me-1"></i>លុបចោល</button>
+                    </div>
 
-            <!-- Admin Products Table -->
-            <div class="glass-card p-3 mb-4">
-                <div class="table-responsive">
-                    <table class="table table-dark custom-table align-middle mb-0">
-                        <thead>
-                            <tr>
-                                <th style="width: 70px;">រូបភាព</th>
-                                <th>ឈ្មោះទំនិញ</th>
-                                <th>ប្រភេទ</th>
-                                <th>តម្លៃ ($ USD)</th>
-                                <th>ស្តុក (Qty)</th>
-                                <th>ស្ថានភាព</th>
-                                <th class="text-center" style="width: 180px;">សកម្មភាព</th>
-                            </tr>
-                        </thead>
-                        <tbody id="adminProductsTableBody">
-                            <!-- Dynamic Table Rows -->
-                        </tbody>
-                    </table>
+                    <div class="d-flex flex-wrap align-items-center gap-2">
+                        <div class="input-group input-group-sm" style="max-width: 220px;">
+                            <span class="input-group-text bg-dark border-secondary text-secondary"><i class="fa-solid fa-magnifying-glass"></i></span>
+                            <input type="text" id="kdsSearchInput" class="form-control bg-dark text-white border-secondary" placeholder="ស្វែងរកឈ្មោះ/តុ..." onkeyup="renderDashboard()">
+                        </div>
+
+                        <div class="btn-group btn-group-sm" role="group">
+                            <button id="btnGridView" class="btn btn-gold active" onclick="setViewMode('grid')" title="មើលជា Cards"><i class="fa-solid fa-grip"></i></button>
+                            <button id="btnTableView" class="btn btn-outline-gold" onclick="setViewMode('table')" title="មើលជា តារាង"><i class="fa-solid fa-list-ul"></i></button>
+                        </div>
+                    </div>
                 </div>
+
+                <!-- Orders Display Container -->
+                <div class="row g-3" id="ordersGridContainer"></div>
+
+                <div class="glass-card p-3 d-none" id="ordersTableContainer">
+                    <div class="table-responsive">
+                        <table class="table table-dark custom-table align-middle mb-0">
+                            <thead>
+                                <tr>
+                                    <th># លេខកូដ</th>
+                                    <th>ឈ្មោះអតិថិជន</th>
+                                    <th>លេខតុ</th>
+                                    <th>មុខទំនិញ</th>
+                                    <th>តម្លៃសរុប</th>
+                                    <th>ពេលវេលា</th>
+                                    <th>ស្ថានភាព</th>
+                                    <th class="text-center">សកម្មភាព</th>
+                                </tr>
+                            </thead>
+                            <tbody id="ordersTableBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+
             </div>
 
         </div>
@@ -986,7 +998,7 @@
         let selectedProductForSugar = null;
         let currentPosCategory = 'all';
 
-        // KDS State
+        // Orders (KDS) State
         let currentKdsFilter = 'all';
         let currentKdsViewMode = 'grid';
 
@@ -1026,16 +1038,16 @@
             updateClock();
             setInterval(updateClock, 1000);
 
-            // Load data from Backend
+            // Load data from Backend (orders only load when admin is logged in)
             await Promise.all([loadProductsFromDb(), refreshOrders()]);
             renderPosProducts();
             renderCart();
             renderDashboard();
             renderAdminTable();
 
-            // Keep multiple devices (POS / KDS / Admin) in sync
+            // Keep Admin orders in sync (only while logged in)
             setInterval(async () => {
-                if (document.hidden) return;
+                if (document.hidden || !isAdminLoggedIn) return;
                 await refreshOrders();
                 renderDashboard();
             }, 5000);
@@ -1058,34 +1070,37 @@
 
         function switchTab(tab) {
             const posSec = document.getElementById('posSection');
-            const kdsSec = document.getElementById('kdsSection');
             const adminSec = document.getElementById('adminSection');
-
             const btnPos = document.getElementById('btnTabPos');
-            const btnKds = document.getElementById('btnTabKds');
             const btnAdmin = document.getElementById('btnTabAdmin');
 
             posSec.classList.add('d-none');
-            kdsSec.classList.add('d-none');
             adminSec.classList.add('d-none');
-
             btnPos.className = 'btn btn-outline-gold rounded-pill px-3 py-2 fw-bold d-flex align-items-center gap-2';
-            btnKds.className = 'btn btn-outline-gold rounded-pill px-3 py-2 fw-bold d-flex align-items-center gap-2 position-relative';
             btnAdmin.className = 'btn btn-outline-gold rounded-pill px-3 py-2 fw-bold d-flex align-items-center gap-2';
 
             if (tab === 'pos') {
                 posSec.classList.remove('d-none');
                 btnPos.className = 'btn btn-gold rounded-pill px-3 py-2 fw-bold active d-flex align-items-center gap-2';
                 renderPosProducts();
-            } else if (tab === 'kds') {
-                kdsSec.classList.remove('d-none');
-                btnKds.className = 'btn btn-gold rounded-pill px-3 py-2 fw-bold active d-flex align-items-center gap-2 position-relative';
-                renderDashboard();
             } else if (tab === 'admin') {
                 adminSec.classList.remove('d-none');
                 btnAdmin.className = 'btn btn-gold rounded-pill px-3 py-2 fw-bold active d-flex align-items-center gap-2';
                 renderAdminTable();
+                renderDashboard();
             }
+        }
+
+        // Admin sub-tabs: Products / Orders
+        function switchAdminSub(sub) {
+            const isOrders = sub === 'orders';
+            document.getElementById('adminProductsPane').classList.toggle('d-none', isOrders);
+            document.getElementById('adminOrdersPane').classList.toggle('d-none', !isOrders);
+            document.getElementById('adminSubProducts').className =
+                'btn rounded-pill px-4 fw-bold ' + (isOrders ? 'btn-outline-gold' : 'btn-gold');
+            document.getElementById('adminSubOrders').className =
+                'btn rounded-pill px-4 fw-bold position-relative ' + (isOrders ? 'btn-gold' : 'btn-outline-gold');
+            if (isOrders) refreshOrders().then(renderDashboard);
         }
 
         // ----------------------------------------------------
@@ -1101,10 +1116,12 @@
             }
         }
 
+        // Orders are admin-only now
         async function refreshOrders() {
+            if (!isAdminLoggedIn) { orders = []; return; }
             try {
-                orders = (await api('/api/orders')).map(mapOrder);
-            } catch (err) { /* offline indicator already set */ }
+                orders = (await api('/api/admin/orders', { auth: true })).map(mapOrder);
+            } catch (err) { /* offline / session expired */ }
         }
 
         function openApiConfigModal() {
@@ -1156,6 +1173,8 @@
                 setAdminLoggedInState(true);
                 adminLoginModalInstance.hide();
                 await loadProductsFromDb();
+                await refreshOrders();
+                renderDashboard();
                 renderAdminTable();
                 renderPosProducts();
                 showToast('ចូលប្រើប្រាស់ជា Admin ដោយជោគជ័យ!');
@@ -1167,6 +1186,9 @@
         async function handleAdminLogout() {
             clearAdminSession();
             setAdminLoggedInState(false);
+            orders = [];
+            renderDashboard();
+            switchTab('pos');
             await loadProductsFromDb();
             renderPosProducts();
             showToast('បានចាកចេញពី Admin');
@@ -1211,6 +1233,7 @@
                 if (guardNotice) guardNotice.classList.add('d-none');
                 if (mainContent) mainContent.classList.remove('d-none');
             } else {
+                orders = []; // clear order data when logged out / token expired
                 navContainer.innerHTML = `
                     <button class="btn btn-sm btn-outline-light rounded-pill px-3" onclick="openAdminLoginModal()">
                         <i class="fa-solid fa-right-to-bracket me-1"></i> ចូលគណនី Admin
@@ -1459,7 +1482,7 @@
             const p = products.find(item => item.id === id);
             if (!p) return;
             itemToDeleteId = id;
-            document.getElementById('deleteConfirmText').textContent = `តើអ្នកពិតជាចង់លុបទំនិញ "${esc(p.name)}" ចេញពីប្រព័ន្ធមែនទេ?`;
+            document.getElementById('deleteConfirmText').textContent = `តើអ្នកពិតជាចង់លុបទំនិញ "${p.name}" ចេញពីប្រព័ន្ធមែនទេ?`;
             confirmDeleteModalInstance.show();
         }
 
@@ -1613,7 +1636,7 @@
 
                     return `
                         <div class="p-2 mb-2 rounded bg-dark bg-opacity-50 border border-secondary border-opacity-25 d-flex gap-2 align-items-center">
-                            <img src="${item.img}" class="rounded-2" style="width: 50px; height: 50px; object-fit: cover;" alt="">
+                            <img src="${esc(item.img)}" class="rounded-2" style="width: 50px; height: 50px; object-fit: cover;" alt="">
                             <div class="flex-grow-1">
                                 <div class="d-flex justify-content-between align-items-start">
                                     <span class="fw-bold text-white small text-truncate" style="max-width: 140px;">${esc(item.name)}</span>
@@ -1658,7 +1681,7 @@
             renderCart();
         }
 
-        // Checkout Cart Action
+        // Checkout Cart Action (customers never see the orders list)
         async function checkoutCartAndSendToKds() {
             if (cart.length === 0) {
                 alert('សូមបន្ថែមទំនិញចូលកន្ត្រកជាមុនសិន!');
@@ -1684,8 +1707,6 @@
                 return;
             }
 
-            orders.unshift(newOrder);
-
             // Reset Cart & Form
             cart = [];
             document.getElementById('cartCustomerName').value = '';
@@ -1698,14 +1719,13 @@
             if (bsOffcanvas) bsOffcanvas.hide();
 
             await loadProductsFromDb();       // pick up deducted stock
-            renderDashboard();
             renderPosProducts();
             renderAdminTable();
-            showToast(`ការកម្ម៉ង់ ${newOrder.id} ត្រូវបានផ្ញើទៅ KDS រួចរាល់!`);
+            showToast(`ការកម្ម៉ង់ ${newOrder.id} ត្រូវបានផ្ញើរួចរាល់! សូមរង់ចាំបន្តិច 🙏`);
         }
 
         // ----------------------------------------------------
-        // 6. KDS ORDER MANAGEMENT PIPELINE & RECEIPT
+        // 6. ADMIN ORDER MANAGEMENT PIPELINE & RECEIPT
         // ----------------------------------------------------
         function renderDashboard() {
             updateMetrics();
@@ -1876,7 +1896,8 @@
 
         async function changeOrderStatus(orderId, newStatus) {
             try {
-                const updated = mapOrder(await api(`/api/orders/${encodeURIComponent(orderId)}/status`, { method: 'PATCH', body: { status: newStatus } }));
+                const updated = mapOrder(await api(`/api/admin/orders/${encodeURIComponent(orderId)}/status`,
+                    { method: 'PATCH', auth: true, body: { status: newStatus } }));
                 const i = orders.findIndex(o => o.id === orderId);
                 if (i > -1) orders[i] = updated;
                 if (newStatus === 'cancelled') { await loadProductsFromDb(); renderPosProducts(); renderAdminTable(); }
