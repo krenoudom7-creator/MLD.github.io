@@ -557,6 +557,8 @@
                             <input type="text" id="kdsSearchInput" class="form-control bg-dark text-white border-secondary" placeholder="ស្វែងរកឈ្មោះ/តុ..." onkeyup="renderDashboard()">
                         </div>
 
+                        <button id="btnSoundToggle" class="btn btn-sm btn-gold" onclick="toggleSound()" title="សំឡេងជូនដំណឹង"><i class="fa-solid fa-volume-high"></i></button>
+
                         <div class="btn-group btn-group-sm" role="group">
                             <button id="btnGridView" class="btn btn-gold active" onclick="setViewMode('grid')" title="មើលជា Cards"><i class="fa-solid fa-grip"></i></button>
                             <button id="btnTableView" class="btn btn-outline-gold" onclick="setViewMode('table')" title="មើលជា តារាង"><i class="fa-solid fa-list-ul"></i></button>
@@ -629,7 +631,7 @@
                             <!-- Price USD -->
                             <div class="col-md-4">
                                 <label class="form-label text-gold small fw-bold">តម្លៃ ($ USD) <span class="text-danger">*</span></label>
-                                <input type="number" step="0.01" min="0" class="form-control bg-dark text-white border-secondary" id="formPrice" required placeholder="2.50">
+                                <input type="number" step="0.01" min="0" class="form-control bg-dark text-white border-secondary" id="formPrice" required placeholder="2.50" oninput="updateDiscountPreview()">
                             </div>
 
                             <!-- Stock Quantity -->
@@ -645,6 +647,20 @@
                                     <option value="active">សកម្ម (Active)</option>
                                     <option value="inactive">អសកម្ម (Inactive)</option>
                                 </select>
+                            </div>
+                        </div>
+
+                        <!-- Discount -->
+                        <div class="row g-3 mb-3">
+                            <div class="col-md-4">
+                                <label class="form-label text-gold small fw-bold">បញ្ចុះតម្លៃ (Discount %)</label>
+                                <div class="input-group">
+                                    <input type="number" min="0" max="100" step="1" value="0" class="form-control bg-dark text-white border-secondary" id="formDiscount" oninput="updateDiscountPreview()">
+                                    <span class="input-group-text bg-dark text-gold border-secondary">%</span>
+                                </div>
+                            </div>
+                            <div class="col-md-8 d-flex align-items-end">
+                                <div class="small text-secondary" id="discountPreview">ដាក់ 0 បើមិនបញ្ចុះតម្លៃ</div>
                             </div>
                         </div>
 
@@ -981,6 +997,109 @@
         }
         function clearAdminSession() { adminToken = null; sessionStorage.removeItem('udom_admin_token'); }
 
+        // Discount helpers (server is the source of truth; this is for display only)
+        function finalPrice(p) {
+            return Math.round(parseFloat(p.price) * (100 - (p.discount || 0))) / 100;
+        }
+        function priceHtml(p, size) {
+            const d = p.discount || 0;
+            if (!d) return `<span>$${parseFloat(p.price).toFixed(2)}</span>`;
+            return `<span class="text-decoration-line-through text-secondary ${size || 'small'} me-1">$${parseFloat(p.price).toFixed(2)}</span><span>$${finalPrice(p).toFixed(2)}</span>`;
+        }
+        function updateDiscountPreview() {
+            const price = parseFloat(document.getElementById('formPrice').value);
+            const d = parseInt(document.getElementById('formDiscount').value) || 0;
+            const el = document.getElementById('discountPreview');
+            if (!el) return;
+            if (!d || isNaN(price)) { el.textContent = 'ដាក់ 0 បើមិនបញ្ចុះតម្លៃ'; return; }
+            const f = Math.round(price * (100 - d)) / 100;
+            el.innerHTML = `តម្លៃបន្ទាប់ពីបញ្ចុះ: <span class="text-gold fw-bold">$${f.toFixed(2)}</span> (សន្សំ $${(price - f).toFixed(2)})`;
+        }
+
+        // ----------------------------------------------------
+        // SOUND ALERTS (Web Audio, no audio files needed)
+        //  - New order  -> bell "ding-dong" x2
+        //  - Order ready -> rising 4-note chime
+        // ----------------------------------------------------
+        let audioCtx = null;
+        let soundOn = true;
+        try { soundOn = localStorage.getItem('udom_sound') !== 'off'; } catch (_) {}
+        let knownStatus = null; // Map(orderId -> status); null until first load after login
+
+        function getAudio() {
+            if (!audioCtx) {
+                const AC = window.AudioContext || window.webkitAudioContext;
+                if (!AC) return null;
+                audioCtx = new AC();
+            }
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            return audioCtx;
+        }
+        // Browsers block audio until the user interacts once -> unlock on first tap/click
+        ['pointerdown', 'keydown'].forEach(ev => document.addEventListener(ev, () => getAudio(), { once: true }));
+
+        function tone(freq, start, dur, type = 'sine', vol = 0.25) {
+            const ctx = getAudio();
+            if (!ctx) return;
+            const t = ctx.currentTime + start;
+            const o = ctx.createOscillator();
+            const g = ctx.createGain();
+            o.type = type;
+            o.frequency.setValueAtTime(freq, t);
+            g.gain.setValueAtTime(0.0001, t);
+            g.gain.exponentialRampToValueAtTime(vol, t + 0.01);
+            g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+            o.connect(g); g.connect(ctx.destination);
+            o.start(t); o.stop(t + dur + 0.05);
+        }
+        function playNewOrderSound() {
+            if (!soundOn) return;
+            [0, 0.6].forEach(d => {
+                tone(880, d, 0.9, 'sine', 0.3);  tone(1760, d, 0.5, 'sine', 0.12);
+                tone(659, d + 0.25, 0.9, 'sine', 0.3); tone(1318, d + 0.25, 0.5, 'sine', 0.12);
+            });
+        }
+        function playReadySound() {
+            if (!soundOn) return;
+            [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => tone(f, i * 0.13, 0.4, 'triangle', 0.28));
+        }
+        function updateSoundButton() {
+            const b = document.getElementById('btnSoundToggle');
+            if (!b) return;
+            b.innerHTML = soundOn ? '<i class="fa-solid fa-volume-high"></i>' : '<i class="fa-solid fa-volume-xmark"></i>';
+            b.className = 'btn btn-sm ' + (soundOn ? 'btn-gold' : 'btn-outline-secondary');
+            b.title = soundOn ? 'សំឡេងកំពុងបើក (ចុចដើម្បីបិទ)' : 'សំឡេងបានបិទ (ចុចដើម្បីបើក)';
+        }
+        function toggleSound() {
+            soundOn = !soundOn;
+            try { localStorage.setItem('udom_sound', soundOn ? 'on' : 'off'); } catch (_) {}
+            updateSoundButton();
+            if (soundOn) playNewOrderSound(); // preview + unlocks audio
+        }
+        document.addEventListener('DOMContentLoaded', updateSoundButton);
+
+        // Compare fresh orders with what we already knew -> fire the right sound
+        function detectOrderEvents(fresh) {
+            if (knownStatus === null) { // first load: just remember, no alarm
+                knownStatus = new Map(fresh.map(o => [o.id, o.status]));
+                return;
+            }
+            let newOrders = [], readyOrders = [];
+            for (const o of fresh) {
+                const prev = knownStatus.get(o.id);
+                if (prev === undefined) { if (o.status === 'pending') newOrders.push(o); }
+                else if (prev !== 'completed' && o.status === 'completed') readyOrders.push(o);
+                knownStatus.set(o.id, o.status);
+            }
+            if (newOrders.length) {
+                playNewOrderSound();
+                const o = newOrders[0];
+                showToast(`🔔 ការកម្ម៉ង់ថ្មី ${o.id} - ${o.customerName} (${o.tableNo})` + (newOrders.length > 1 ? ` +${newOrders.length - 1}` : ''));
+            } else if (readyOrders.length) {
+                playReadySound();
+            }
+        }
+
         function mapOrder(o) {
             return { ...o, timestamp: new Date(o.createdAt).toLocaleTimeString('en-US') };
         }
@@ -1118,9 +1237,11 @@
 
         // Orders are admin-only now
         async function refreshOrders() {
-            if (!isAdminLoggedIn) { orders = []; return; }
+            if (!isAdminLoggedIn) { orders = []; knownStatus = null; return; }
             try {
-                orders = (await api('/api/admin/orders', { auth: true })).map(mapOrder);
+                const fresh = (await api('/api/admin/orders', { auth: true })).map(mapOrder);
+                detectOrderEvents(fresh);
+                orders = fresh;
             } catch (err) { /* offline / session expired */ }
         }
 
@@ -1234,6 +1355,7 @@
                 if (mainContent) mainContent.classList.remove('d-none');
             } else {
                 orders = []; // clear order data when logged out / token expired
+                knownStatus = null;
                 navContainer.innerHTML = `
                     <button class="btn btn-sm btn-outline-light rounded-pill px-3" onclick="openAdminLoginModal()">
                         <i class="fa-solid fa-right-to-bracket me-1"></i> ចូលគណនី Admin
@@ -1286,7 +1408,7 @@
                         <small class="text-secondary text-truncate d-block" style="max-width: 200px;">${esc(p.description || '-')}</small>
                     </td>
                     <td><span class="badge bg-dark border border-secondary text-capitalize">${getCategoryLabel(p.category)}</span></td>
-                    <td class="fw-bold text-gold">$${parseFloat(p.price).toFixed(2)}</td>
+                    <td class="fw-bold text-gold">${priceHtml(p)}${p.discount ? `<span class="badge bg-danger ms-1">-${p.discount}%</span>` : ''}</td>
                     <td>
                         <div class="d-flex align-items-center gap-1">
                             <button class="btn btn-sm btn-outline-secondary py-0 px-2 text-white" onclick="adjustProductStock('${p.id}', -1)">-</button>
@@ -1327,6 +1449,8 @@
         function openAddProductModal() {
             document.getElementById('productForm').reset();
             document.getElementById('formProductId').value = '';
+            document.getElementById('formDiscount').value = 0;
+            updateDiscountPreview();
             document.getElementById('productModalTitle').innerHTML = '<i class="fa-solid fa-box-open me-2"></i>បន្ថែមទំនិញថ្មី';
             resetImagePreview();
             productModalInstance.show();
@@ -1342,6 +1466,8 @@
             document.getElementById('formCategory').value = p.category;
             document.getElementById('formPrice').value = p.price;
             document.getElementById('formStock').value = p.stock;
+            document.getElementById('formDiscount').value = p.discount || 0;
+            updateDiscountPreview();
             document.getElementById('formStatus').value = p.status;
             document.getElementById('formDescription').value = p.description || '';
             document.getElementById('formImageUrl').value = (p.image || '').startsWith('/uploads/') ? '' : (p.image || '');
@@ -1414,9 +1540,14 @@
             const category = document.getElementById('formCategory').value;
             const price = parseFloat(document.getElementById('formPrice').value);
             const stock = parseInt(document.getElementById('formStock').value);
+            const discount = parseInt(document.getElementById('formDiscount').value) || 0;
             const status = document.getElementById('formStatus').value;
             const description = document.getElementById('formDescription').value.trim();
 
+            if (discount < 0 || discount > 100) {
+                alert('ការបញ្ចុះតម្លៃត្រូវតែនៅចន្លោះ 0-100%');
+                return;
+            }
             if (!name || isNaN(price) || isNaN(stock)) {
                 alert('សូមបញ្ចូលទិន្នន័យឱ្យបានត្រឹមត្រូវ!');
                 return;
@@ -1438,7 +1569,7 @@
                 }
                 if (!finalImage) finalImage = 'https://images.unsplash.com/photo-1517701604599-bb29b565090c?auto=format&fit=crop&w=400&q=80';
 
-                const productData = { name, category, price, stock, status, description, image: finalImage };
+                const productData = { name, category, price, discount, stock, status, description, image: finalImage };
                 if (id) {
                     await api('/api/admin/products/' + encodeURIComponent(id), { method: 'PUT', auth: true, body: productData });
                 } else {
@@ -1537,6 +1668,7 @@
                 return `
                     <div class="col-6 col-md-4 col-lg-3">
                         <div class="card glass-card product-card text-white h-100 p-3 ${isOut ? 'out-of-stock' : ''}">
+                            ${p.discount ? `<span class="badge bg-danger position-absolute top-0 start-0 m-3 fs-6" style="z-index:2;">-${p.discount}%</span>` : ''}
                             <img src="${esc(imgUrl(p.image))}" class="card-img-top rounded-3 mb-2" style="height: 160px; object-fit: cover;" alt="${esc(p.name)}" onerror="this.src='https://via.placeholder.com/300x200?text=MLOB+DOUNG+COFFEE'">
                             
                             <div class="card-body p-0 d-flex flex-column justify-content-between">
@@ -1545,7 +1677,7 @@
                                         <h6 class="card-title fw-bold text-truncate mb-0" title="${esc(p.name)}">${esc(p.name)}</h6>
                                         <span class="badge ${isOut ? 'bg-danger' : 'bg-success'} small">${isOut ? 'អស់ស្តុក' : 'ស្តុក: ' + p.stock}</span>
                                     </div>
-                                    <p class="text-gold fw-bold fs-5 mb-2">$${parseFloat(p.price).toFixed(2)}</p>
+                                    <p class="text-gold fw-bold fs-5 mb-2">${priceHtml(p)}</p>
                                 </div>
 
                                 <button class="btn btn-gold w-100 rounded-pill btn-sm fw-bold py-2 ${isOut ? 'disabled opacity-50' : ''}" onclick="openSugarModalForProduct('${p.id}')">
@@ -1563,7 +1695,7 @@
             if (!selectedProductForSugar || selectedProductForSugar.stock <= 0) return;
 
             document.getElementById('modalItemName').textContent = selectedProductForSugar.name;
-            document.getElementById('modalItemPrice').textContent = '$' + parseFloat(selectedProductForSugar.price).toFixed(2);
+            document.getElementById('modalItemPrice').innerHTML = priceHtml(selectedProductForSugar, 'fs-6');
             document.getElementById('modalItemImg').src = imgUrl(selectedProductForSugar.image);
             document.getElementById('sugar50').checked = true;
             document.getElementById('itemNote').value = '';
@@ -1592,7 +1724,7 @@
                 cart.push({
                     id: selectedProductForSugar.id,
                     name: selectedProductForSugar.name,
-                    price: parseFloat(selectedProductForSugar.price),
+                    price: finalPrice(selectedProductForSugar),
                     img: imgUrl(selectedProductForSugar.image),
                     sugar: selectedSugar,
                     note: note,
@@ -1900,6 +2032,8 @@
                     { method: 'PATCH', auth: true, body: { status: newStatus } }));
                 const i = orders.findIndex(o => o.id === orderId);
                 if (i > -1) orders[i] = updated;
+                if (knownStatus) knownStatus.set(orderId, newStatus); // avoid double alarm on next poll
+                if (newStatus === 'completed') playReadySound();
                 if (newStatus === 'cancelled') { await loadProductsFromDb(); renderPosProducts(); renderAdminTable(); }
                 renderDashboard();
             } catch (err) { alert(err.message); }
