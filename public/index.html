@@ -170,6 +170,122 @@
             object-fit: cover;
         }
 
+        /* =====================================================
+           RGB GLOW + ANIMATIONS
+           ===================================================== */
+        @property --angle { syntax: '<angle>'; initial-value: 0deg; inherits: false; }
+        :root {
+            --rgb-conic: conic-gradient(from var(--angle), #ff0040, #ff8000, #ffe600, #00ff6a, #00d5ff, #7a5cff, #ff00d4, #ff0040);
+            --rgb-linear: linear-gradient(90deg, #ff0040, #ff8000, #ffe600, #00ff6a, #00d5ff, #7a5cff, #ff00d4, #ff0040);
+        }
+        @keyframes spinAngle { to { --angle: 360deg; } }
+        @keyframes rgbSlide { to { background-position: 200% 0; } }
+        @keyframes cardIn { from { opacity: 0; transform: translateY(24px) scale(.96); } to { opacity: 1; transform: none; } }
+        @keyframes popIn { from { opacity: 0; transform: scale(.92); } to { opacity: 1; transform: none; } }
+        @keyframes toastIn { from { opacity: 0; transform: translateX(40px); } to { opacity: 1; transform: none; } }
+        @keyframes bump {
+            0% { transform: translate(-50%, -50%) scale(1); }
+            40% { transform: translate(-50%, -50%) scale(1.6); }
+            100% { transform: translate(-50%, -50%) scale(1); }
+        }
+        @keyframes badgePulse {
+            0% { box-shadow: 0 0 0 0 rgba(220, 53, 69, .75); }
+            70% { box-shadow: 0 0 0 10px rgba(220, 53, 69, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0); }
+        }
+        @keyframes discountPulse { 0%, 100% { transform: scale(1) rotate(-3deg); } 50% { transform: scale(1.12) rotate(3deg); } }
+        @keyframes glowAmber { 0%, 100% { box-shadow: 0 0 0 rgba(255, 193, 7, 0); } 50% { box-shadow: 0 0 22px rgba(255, 193, 7, .45); } }
+        @keyframes glowCyan { 0%, 100% { box-shadow: 0 0 0 rgba(13, 202, 240, 0); } 50% { box-shadow: 0 0 22px rgba(13, 202, 240, .45); } }
+        @keyframes aurora {
+            0% { transform: translate3d(-4%, -3%, 0) rotate(0deg) scale(1); }
+            100% { transform: translate3d(4%, 3%, 0) rotate(8deg) scale(1.15); }
+        }
+        @keyframes shimmer { to { background-position: 200% center; } }
+
+        /* Soft RGB aurora behind the whole app */
+        body { position: relative; }
+        body::before {
+            content: ''; position: fixed; inset: -20%; z-index: -1; pointer-events: none; opacity: .22;
+            background:
+                radial-gradient(40% 35% at 18% 22%, #ff0066 0%, transparent 70%),
+                radial-gradient(38% 40% at 82% 18%, #00d5ff 0%, transparent 70%),
+                radial-gradient(45% 40% at 70% 85%, #7a5cff 0%, transparent 70%),
+                radial-gradient(35% 35% at 20% 85%, #00ff6a 0%, transparent 70%);
+            animation: aurora 24s ease-in-out infinite alternate; will-change: transform;
+        }
+
+        /* Moving RGB line under the navbar */
+        .navbar::after {
+            content: ''; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; pointer-events: none;
+            background: var(--rgb-linear); background-size: 200% 100%;
+            animation: rgbSlide 6s linear infinite; box-shadow: 0 0 12px rgba(0, 213, 255, .55);
+        }
+
+        /* Logo ring */
+        .logo-ring {
+            position: relative; display: inline-flex; padding: 3px; border-radius: 50%; isolation: isolate; flex: 0 0 auto;
+            background: var(--rgb-conic); animation: spinAngle 4s linear infinite;
+        }
+        .logo-ring::before {
+            content: ''; position: absolute; inset: -5px; z-index: -1; border-radius: 50%;
+            background: var(--rgb-conic); filter: blur(10px); opacity: .55; animation: spinAngle 4s linear infinite;
+        }
+        .logo-ring svg { display: block; background: #0b0e14; border-radius: 50%; }
+
+        /* Brand title shimmer */
+        .brand-title {
+            background: linear-gradient(90deg, #ffd700 0%, #fff3b0 25%, #ffd700 50%, #ff9f1c 75%, #ffd700 100%);
+            background-size: 200% auto; -webkit-background-clip: text; background-clip: text;
+            -webkit-text-fill-color: transparent; animation: shimmer 5s linear infinite;
+        }
+
+        /* Reusable animated RGB border (mask trick) */
+        .rgb-ring::before, .product-card::before, .modal-content.glass-card::before {
+            content: ''; position: absolute; inset: 0; border-radius: inherit; padding: 2px; pointer-events: none;
+            background: var(--rgb-conic); animation: spinAngle 4s linear infinite;
+            -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+            -webkit-mask-composite: xor; mask-composite: exclude;
+        }
+        .modal-content.glass-card { position: relative; animation: popIn .35s ease; }
+        .modal-content.glass-card::before { opacity: .8; }
+        .rgb-ring { position: relative; }
+        .rgb-ring:hover { box-shadow: 0 0 16px rgba(0, 213, 255, .45), 0 0 26px rgba(255, 0, 212, .3); }
+
+        /* Product cards: ring + glow on hover */
+        .product-card::before { opacity: 0; transition: opacity .3s ease; z-index: 3; }
+        .product-card:hover::before { opacity: 1; }
+        .product-card:hover { box-shadow: 0 10px 28px rgba(0, 0, 0, .55), 0 0 20px rgba(0, 213, 255, .25), 0 0 34px rgba(255, 0, 212, .18); }
+        .product-card:hover img { transform: scale(1.05); }
+        .product-card img { transition: transform .4s ease; }
+        .product-card:hover .btn-gold:not(.disabled) { background: linear-gradient(90deg, #ffd700, #ff9f1c, #ff4d6d, #c77dff, #4cc9f0, #ffd700); background-size: 300% 100%; animation: rgbSlide 4s linear infinite; }
+
+        /* RGB gradient button */
+        .btn-gold.btn-rgb {
+            background: linear-gradient(90deg, #ffd700, #ff9f1c, #ff4d6d, #c77dff, #4cc9f0, #ffd700);
+            background-size: 300% 100%; animation: rgbSlide 5s linear infinite; color: #0b0e14;
+        }
+        .btn-gold.btn-rgb:hover { box-shadow: 0 0 18px rgba(255, 77, 109, .5), 0 0 28px rgba(76, 201, 240, .4); }
+        .btn-gold:active, .btn-outline-gold:active { transform: scale(.96); }
+        .category-btn.active { box-shadow: 0 0 14px rgba(255, 215, 0, .5); }
+
+        /* Entrance animations (only for newly seen items, see enterAttr) */
+        [data-enter] { animation: cardIn .5s ease backwards; }
+        .toast.show, .toast.showing { animation: toastIn .4s ease; }
+        #cartBadge.bump { animation: bump .45s ease; }
+        .badge.pulse { animation: badgePulse 1.4s ease-out infinite; }
+        .discount-badge { animation: discountPulse 1.8s ease-in-out infinite; box-shadow: 0 0 14px rgba(220, 53, 69, .7); }
+
+        /* Live order status glow */
+        .order-card.status-pending { animation: glowAmber 2.2s ease-in-out infinite; }
+        .order-card.status-preparing { animation: glowCyan 2.2s ease-in-out infinite; }
+        .order-card:hover { transform: translateY(-4px); }
+        .custom-table tbody tr:hover td { background-color: rgba(255, 215, 0, .07) !important; }
+
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after { animation: none !important; transition: none !important; }
+        }
+        @media print { body::before, .navbar::after { display: none !important; } }
+
         /* Toast notification */
         .toast-container {
             position: fixed;
@@ -221,7 +337,7 @@
         <div class="container-fluid px-4">
             <a class="navbar-brand fw-bold d-flex align-items-center gap-2" href="#">
                 <!-- Custom Mlob Doung Coffee Logo SVG -->
-                <svg width="42" height="42" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <span class="logo-ring"><svg width="42" height="42" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
                     <circle cx="32" cy="32" r="30" fill="url(#logoGrad)" stroke="#ffd700" stroke-width="2"/>
                     <defs>
                         <linearGradient id="logoGrad" x1="0" y1="0" x2="64" y2="64">
@@ -243,9 +359,9 @@
                     <path d="M33 33 Q 35 31 33 29" stroke="#ffd700" stroke-width="1.5" fill="none" stroke-linecap="round"/>
                     <path d="M38 33 Q 40 31 38 29" stroke="#ffd700" stroke-width="1.5" fill="none" stroke-linecap="round"/>
                     <path d="M43 33 Q 45 31 43 29" stroke="#ffd700" stroke-width="1.5" fill="none" stroke-linecap="round"/>
-                </svg>
+                </svg></span>
                 <div class="d-flex flex-column leading-none">
-                    <span class="fs-4 text-gold fw-bold" style="line-height: 1.1;">កាហ្វេ ម្លប់ដូង</span>
+                    <span class="fs-4 text-gold fw-bold brand-title" style="line-height: 1.1;">កាហ្វេ ម្លប់ដូង</span>
                     <small class="text-secondary fw-semibold" style="font-size: 0.65rem; letter-spacing: 1px;">MLOB DOUNG COFFEE</small>
                 </div>
             </a>
@@ -264,7 +380,7 @@
             <!-- Cart Trigger, Admin Status & Clock -->
             <div class="d-flex align-items-center gap-3">
                 <!-- Cart Button -->
-                <button class="btn btn-outline-gold rounded-pill px-3 py-2 position-relative" id="posCartBtn" type="button" data-bs-toggle="offcanvas" data-bs-target="#cartOffcanvas">
+                <button class="btn btn-outline-gold rounded-pill px-3 py-2 position-relative rgb-ring" id="posCartBtn" type="button" data-bs-toggle="offcanvas" data-bs-target="#cartOffcanvas">
                     <i class="fa-solid fa-cart-shopping me-1"></i><span class="d-none d-sm-inline"> កន្ត្រក</span>
                     <span id="cartBadge" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-gold text-dark fw-bold">0</span>
                 </button>
@@ -847,7 +963,7 @@
                 </div>
                 <div class="modal-footer border-top border-secondary border-opacity-25">
                     <button type="button" class="btn btn-secondary rounded-pill px-4" data-bs-dismiss="modal">បោះបង់</button>
-                    <button type="button" class="btn btn-gold rounded-pill px-4" id="confirmAddToCartBtn">
+                    <button type="button" class="btn btn-gold btn-rgb rounded-pill px-4" id="confirmAddToCartBtn">
                         <i class="fa-solid fa-cart-plus me-1"></i> បន្ថែមចូល Cart
                     </button>
                 </div>
@@ -885,7 +1001,7 @@
                     <span id="cartTotalPrice" class="fs-4 fw-bold text-gold">$0.00</span>
                 </div>
                 
-                <button class="btn btn-gold w-100 py-2 rounded-3 fs-6 fw-bold" onclick="checkoutCartAndSendToKds()">
+                <button class="btn btn-gold btn-rgb w-100 py-2 rounded-3 fs-6 fw-bold" onclick="checkoutCartAndSendToKds()">
                     <i class="fa-solid fa-paper-plane me-2"></i>ទូទាត់ប្រាក់ & ផ្ញើការកម្ម៉ង់
                 </button>
             </div>
@@ -1098,6 +1214,16 @@
             } else if (readyOrders.length) {
                 playReadySound();
             }
+        }
+
+        // Entrance animation only for items we haven't shown yet (polling re-renders won't replay it)
+        const seenProducts = new Set();
+        const seenOrderCards = new Set();
+        let lastCartCount = 0;
+        function enterAttr(set, id, idx) {
+            const isNew = !set.has(id);
+            set.add(id);
+            return isNew ? `data-enter style="animation-delay:${Math.min(idx, 12) * 55}ms"` : '';
         }
 
         function mapOrder(o) {
@@ -1663,12 +1789,12 @@
                 return;
             }
 
-            grid.innerHTML = filtered.map(p => {
+            grid.innerHTML = filtered.map((p, idx) => {
                 const isOut = p.stock <= 0;
                 return `
-                    <div class="col-6 col-md-4 col-lg-3">
+                    <div class="col-6 col-md-4 col-lg-3" ${enterAttr(seenProducts, p.id, idx)}>
                         <div class="card glass-card product-card text-white h-100 p-3 ${isOut ? 'out-of-stock' : ''}">
-                            ${p.discount ? `<span class="badge bg-danger position-absolute top-0 start-0 m-3 fs-6" style="z-index:2;">-${p.discount}%</span>` : ''}
+                            ${p.discount ? `<span class="badge bg-danger position-absolute top-0 start-0 m-3 fs-6 discount-badge" style="z-index:2;">-${p.discount}%</span>` : ''}
                             <img src="${esc(imgUrl(p.image))}" class="card-img-top rounded-3 mb-2" style="height: 160px; object-fit: cover;" alt="${esc(p.name)}" onerror="this.src='https://via.placeholder.com/300x200?text=MLOB+DOUNG+COFFEE'">
                             
                             <div class="card-body p-0 d-flex flex-column justify-content-between">
@@ -1791,6 +1917,10 @@
             }
 
             badge.textContent = totalCount;
+            if (totalCount !== lastCartCount) {
+                badge.classList.remove('bump'); void badge.offsetWidth; badge.classList.add('bump');
+                lastCartCount = totalCount;
+            }
             totalEl.textContent = '$' + totalPrice.toFixed(2);
         }
 
@@ -1896,6 +2026,7 @@
 
             document.getElementById('cntAll').textContent = total;
             document.getElementById('kdsPendingBadge').textContent = pending;
+            document.getElementById('kdsPendingBadge').classList.toggle('pulse', pending > 0);
         }
 
         function renderKdsGridCards(items) {
@@ -1910,7 +2041,7 @@
                 return;
             }
 
-            container.innerHTML = items.map(o => {
+            container.innerHTML = items.map((o, idx) => {
                 const itemsList = o.items.map(i => `
                     <div class="d-flex justify-content-between align-items-center mb-1">
                         <div>
@@ -1923,7 +2054,7 @@
                 `).join('');
 
                 return `
-                    <div class="col-12 col-md-6 col-lg-4 col-xl-3">
+                    <div class="col-12 col-md-6 col-lg-4 col-xl-3" ${enterAttr(seenOrderCards, o.id, idx)}>
                         <div class="glass-card order-card status-${o.status} p-3 h-100 d-flex flex-column justify-content-between">
                             <div>
                                 <div class="d-flex justify-content-between align-items-start border-bottom border-secondary border-opacity-25 pb-2 mb-2">
