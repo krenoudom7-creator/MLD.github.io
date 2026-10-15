@@ -2,7 +2,12 @@
 <html lang="km">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#0b0e14">
+    <link rel="manifest" href="manifest.webmanifest">
+    <link rel="apple-touch-icon" href="icons/icon-192.png">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
     <title>កាហ្វេ ម្លប់ដូង - Dynamic Product Management & POS System</title>
     <!-- Bootstrap 5 CSS -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
@@ -180,6 +185,33 @@
             #receiptModal .modal-content { position: absolute; left: 0; top: 0; width: 100%; color: #000 !important; background: #fff !important; }
             .no-print { display: none !important; }
         }
+
+        /* ---- Phone layout ---- */
+        @media (max-width: 767.98px) {
+            .navbar > .container-fluid { padding-left: .75rem !important; padding-right: .75rem !important; flex-wrap: wrap; gap: .25rem; }
+            .navbar-brand svg { width: 34px; height: 34px; }
+            .navbar-brand .fs-4 { font-size: 1.05rem !important; }
+            #navTabs { order: 3; width: 100%; flex-wrap: nowrap !important; overflow-x: auto; margin: .25rem 0 !important; padding-bottom: 2px; scrollbar-width: none; }
+            #navTabs::-webkit-scrollbar { display: none; }
+            #navTabs .btn { flex: 0 0 auto; white-space: nowrap; font-size: .82rem; padding: .4rem .8rem !important; }
+            #productsGrid { --bs-gutter-x: .6rem; --bs-gutter-y: .6rem; }
+            #productsGrid img { height: 110px !important; object-fit: cover; }
+            #productsGrid .btn { font-size: .8rem; }
+            .btn, .form-control, .form-select { min-height: 40px; }
+            .navbar-brand small { display: none; }
+            .navbar-brand { flex: 1 1 0; min-width: 0; margin-right: .5rem !important; }
+            .navbar-brand svg { flex: 0 0 auto; }
+            .navbar-brand .fs-4 { font-size: .95rem !important; white-space: nowrap; }
+            .navbar > .container-fluid > .d-flex:last-child { flex: 0 0 auto; }
+            .navbar > .container-fluid > .d-flex:last-child { margin-left: auto; gap: .5rem !important; }
+            #btnLoginNav { font-size: .75rem; padding: .3rem .65rem !important; }
+            body > div[id$="Section"] { padding-left: .6rem !important; padding-right: .6rem !important; }
+            #productsGrid .product-card { padding: .6rem !important; }
+            #productsGrid .card-title { white-space: normal !important; font-size: .85rem; line-height: 1.25; }
+            #productsGrid .d-flex.justify-content-between { flex-wrap: wrap; }
+            #productsGrid .fs-5 { font-size: 1.05rem !important; margin-bottom: .5rem !important; }
+        }
+        @supports (padding: max(0px)) { body { padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); } }
     </style>
 </head>
 <body>
@@ -219,7 +251,7 @@
             </a>
 
             <!-- Mode Switcher Tabs -->
-            <div class="d-flex flex-wrap align-items-center gap-2 my-2 my-lg-0">
+            <div id="navTabs" class="d-flex flex-wrap align-items-center gap-2 my-2 my-lg-0">
                 <button class="btn btn-gold rounded-pill px-3 py-2 fw-bold active d-flex align-items-center gap-2" id="btnTabPos" onclick="switchTab('pos')">
                     <i class="fa-solid fa-store"></i> ហាងទំនិញ (POS)
                 </button>
@@ -237,7 +269,7 @@
             <div class="d-flex align-items-center gap-3">
                 <!-- Cart Button -->
                 <button class="btn btn-outline-gold rounded-pill px-3 py-2 position-relative" id="posCartBtn" type="button" data-bs-toggle="offcanvas" data-bs-target="#cartOffcanvas">
-                    <i class="fa-solid fa-cart-shopping me-1"></i> កន្ត្រក
+                    <i class="fa-solid fa-cart-shopping me-1"></i><span class="d-none d-sm-inline"> កន្ត្រក</span>
                     <span id="cartBadge" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-gold text-dark fw-bold">0</span>
                 </button>
 
@@ -1480,7 +1512,7 @@
             grid.innerHTML = filtered.map(p => {
                 const isOut = p.stock <= 0;
                 return `
-                    <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                    <div class="col-6 col-md-4 col-lg-3">
                         <div class="card glass-card product-card text-white h-100 p-3 ${isOut ? 'out-of-stock' : ''}">
                             <img src="${esc(imgUrl(p.image))}" class="card-img-top rounded-3 mb-2" style="height: 160px; object-fit: cover;" alt="${esc(p.name)}" onerror="this.src='https://via.placeholder.com/300x200?text=MLOB+DOUNG+COFFEE'">
                             
@@ -1553,6 +1585,10 @@
         document.getElementById('itemNote').addEventListener('input', e => {
             document.getElementById('itemNoteCount').textContent = e.target.value.length;
         });
+
+        if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+            window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+        }
 
         function renderCart() {
             const container = document.getElementById('cartItemsList');
