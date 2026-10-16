@@ -335,16 +335,49 @@
         .receipt-paper .rc-row { display: flex; justify-content: space-between; gap: 8px; }
         .receipt-paper .rc-total { font-size: 17px; font-weight: 700; }
 
-      #printArea { display: none; }
-@page { size: 80mm auto; margin: 0; }
-@media print {
-    html, body { margin: 0 !important; padding: 0 !important; background: #fff !important; min-height: 0 !important; }
-    body > *:not(#printArea) { display: none !important; }
-    #printArea { display: block !important; width: 72mm; margin: 0 auto; padding: 2mm 0 8mm; background: #fff; color: #000; }
-    #printArea .receipt-paper { font-size: 12px; }
-    #printArea * { color: #000 !important; }
+#printArea { 
+    display: none; 
 }
 
+@page { 
+    size: 80mm auto; 
+    margin: 0; 
+}
+
+@media print {
+    html, body { 
+        margin: 0 !important; 
+        padding: 0 !important; 
+        background: #fff !important; 
+        width: 80mm !important;
+    }
+    
+    /* លាក់រាល់សមាសភាពក្នុងកូដទាំងមូលលើកលែងតែ printArea */
+    body > *:not(#printArea) { 
+        display: none !important; 
+    }
+    
+    #printArea { 
+        display: block !important; 
+        width: 76mm !important; 
+        margin: 0 auto !important; 
+        padding: 2mm 2mm 5mm 2mm !important; 
+        background: #fff !important; 
+        color: #000 !important;
+        font-family: 'Kantumruy Pro', sans-serif !important;
+    }
+    
+    #printArea .receipt-paper { 
+        font-size: 12px !important; 
+        color: #000 !important;
+        width: 100% !important;
+    }
+    
+    #printArea * { 
+        color: #000 !important; 
+        -webkit-print-color-adjust: exact;
+    }
+}
         /* ---- Phone layout ---- */
         @media (max-width: 767.98px) {
             .navbar > .container-fluid { padding-left: .75rem !important; padding-right: .75rem !important; flex-wrap: wrap; gap: .25rem; }
@@ -1176,6 +1209,28 @@
             </div>
         </div>
     </div>
+    <!-- កន្លែងសម្រាប់ដាក់ទម្រង់វិក្កយបត្រពេលព្រីន -->
+<div id="printArea">
+    <div class="receipt-paper p-2">
+        <div class="text-center rc-shop">កាហ្វេ ម្លប់ដូង</div>
+        <div class="text-center rc-sub mb-2">MLOB DOUNG COFFEE</div>
+        <div class="rc-info small mb-2">
+            <div><span>វិក្កយបត្រ:</span> <span id="printOrderNo">#001</span></div>
+            <div><span>ថ្ងៃខែ:</span> <span id="printDate">16/10/2026 21:00</span></div>
+            <div><span>អ្នកគិតលុយ:</span> <span id="printCashier">Admin</span></div>
+        </div>
+        <hr class="rc-sep">
+        <div id="printItemsList">
+            <!-- ទំនិញនឹងត្រូវបញ្ចូលមកទីនេះដោយស្វ័យប្រវត្តិតាម JavaScript -->
+        </div>
+        <hr class="rc-sep">
+        <div class="rc-row"><span>សរុបទឹកប្រាក់:</span> <span id="printTotalPrice">0.00 រៀល</span></div>
+        <div class="rc-row"><span>ប្រាក់បានបង់:</span> <span id="printPaidAmount">0.00 រៀល</span></div>
+        <div class="rc-row"><span>ប្រាក់អាប់:</span> <span id="printChangeAmount">0.00 រៀល</span></div>
+        <hr class="rc-sep">
+        <div class="text-center small mt-2">អរគុណច្រើន! សូមអញ្ជើញមកម្តងទៀត 🙏</div>
+    </div>
+</div>
 
     <!-- TOAST NOTIFICATION CONTAINER -->
     <div class="toast-container">
