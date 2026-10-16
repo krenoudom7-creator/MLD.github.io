@@ -335,19 +335,15 @@
         .receipt-paper .rc-row { display: flex; justify-content: space-between; gap: 8px; }
         .receipt-paper .rc-total { font-size: 17px; font-weight: 700; }
 
-        /* Print: 80mm thermal paper (printable width ~72mm) */
-        @page { size: 80mm auto; margin: 0; }
-        @media print {
-            html, body { margin: 0 !important; padding: 0 !important; background: #fff !important; min-height: 0 !important; }
-            body > *:not(#receiptModal) { display: none !important; }
-            .modal-backdrop { display: none !important; }
-            #receiptModal { position: static !important; display: block !important; overflow: visible !important; opacity: 1 !important; }
-            #receiptModal .modal-dialog { position: static; width: 72mm; max-width: 72mm; margin: 0 auto !important; transform: none !important; }
-            #receiptModal .modal-content { border: 0 !important; box-shadow: none !important; border-radius: 0 !important; padding: 2mm 0 6mm !important; background: #fff !important; color: #000 !important; width: 72mm; animation: none !important; }
-            .receipt-paper { font-size: 12px; color: #000 !important; }
-            .receipt-paper * { color: #000 !important; }
-            .no-print { display: none !important; }
-        }
+      #printArea { display: none; }
+@page { size: 80mm auto; margin: 0; }
+@media print {
+    html, body { margin: 0 !important; padding: 0 !important; background: #fff !important; min-height: 0 !important; }
+    body > *:not(#printArea) { display: none !important; }
+    #printArea { display: block !important; width: 72mm; margin: 0 auto; padding: 2mm 0 8mm; background: #fff; color: #000; }
+    #printArea .receipt-paper { font-size: 12px; }
+    #printArea * { color: #000 !important; }
+}
 
         /* ---- Phone layout ---- */
         @media (max-width: 767.98px) {
