@@ -1884,34 +1884,55 @@
             resetImagePreview();
             productModalInstance.show();
         }
+const AUTO_PRINT = true;          // បោះពុម្ពស្វ័យប្រវត្តិពេលកម្ម៉ង់ថ្មី
+let currentReceiptOrder = null;
 
-        // Open Edit Modal
-        function openEditProductModal(id) {
-            const p = products.find(item => item.id === id);
-            if (!p) return;
+function receiptHtml(o) {
+    const d = new Date(o.createdAt);
+    const dateStr = d.toLocaleDateString('en-GB') + ' ' + d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+    const qtyTotal = o.items.reduce((n, i) => n + i.quantity, 0);
 
-            document.getElementById('formProductId').value = p.id;
-            document.getElementById('formProductName').value = p.name;
-            document.getElementById('formCategory').value = p.category;
-            document.getElementById('formPrice').value = p.price;
-            document.getElementById('formStock').value = p.stock;
-            document.getElementById('formDiscount').value = p.discount || 0;
-            updateDiscountPreview();
-            document.getElementById('formStatus').value = p.status;
-            document.getElementById('formDescription').value = p.description || '';
-            document.getElementById('formImageUrl').value = (p.image || '').startsWith('/uploads/') ? '' : (p.image || '');
+    const itemsHtml = o.items.map(i => `
+        <div class="rc-item">
+            <div class="rc-name">${esc(i.name)}</div>
+            ${(i.sugar || i.note) ? `<div class="rc-meta">${i.sugar ? 'ស្ករ ' + esc(i.sugar) : ''}${i.sugar && i.note ? ' · ' : ''}${i.note ? 'ចំណាំ: ' + esc(i.note) : ''}</div>` : ''}
+            <div class="rc-row"><span>${i.quantity} × $${i.price.toFixed(2)}</span><span>$${(i.price * i.quantity).toFixed(2)}</span></div>
+        </div>`).join('');
 
-            document.getElementById('productModalTitle').innerHTML = '<i class="fa-solid fa-pen-to-square me-2"></i>កែប្រែទំនិញ';
+    return `
+        <div class="text-center pb-2 mb-2" style="border-bottom:1px dashed #000">
+            <div class="rc-shop">កាហ្វេ ម្លប់ដូង</div>
+            <div class="rc-sub">MLOB DOUNG COFFEE</div>
+        </div>
+        <div class="rc-info">
+            <div><span>វិក្កយបត្រ:</span><b>${o.id}</b></div>
+            <div><span>កាលបរិច្ឆេទ:</span><span>${dateStr}</span></div>
+            <div><span>អតិថិជន:</span><span>${esc(o.customerName)}</span></div>
+            <div><span>លេខតុ:</span><span>${esc(o.tableNo)}</span></div>
+        </div>
+        <hr class="rc-sep">
+        ${itemsHtml}
+        <hr class="rc-sep">
+        <div class="rc-row"><span>ចំនួនសរុប</span><span>${qtyTotal}</span></div>
+        <div class="rc-row rc-total"><span>សរុប (TOTAL)</span><span>$${o.total.toFixed(2)}</span></div>
+        <hr class="rc-sep">
+        <div class="text-center small">សូមអរគុណ! សូមអញ្ជើញមកម្តងទៀត!</div>`;
+}
 
-            currentUploadedImageData = p.image || null;
-            if (p.image) {
-                showImagePreview(imgUrl(p.image));
-            } else {
-                resetImagePreview();
-            }
+function openReceiptModal(orderId) {
+    const o = orders.find(item => item.id === orderId);
+    if (!o) return;
+    currentReceiptOrder = o;
+    document.getElementById('receiptContent').innerHTML = receiptHtml(o);
+    receiptModalInstance.show();
+}
 
-            productModalInstance.show();
-        }
+function printReceipt(o) {
+    if (!o) return;
+    document.getElementById('printArea').innerHTML = `<div class="receipt-paper">${receiptHtml(o)}</div>`;
+    // រង់ចាំ Font ខ្មែរផ្ទុករួច ទើបបោះពុម្ព
+    (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => setTimeout(() => window.print(), 150));
+}
 
         // Handling File Upload Preview (FileReader)
         function handleImageFileSelect(event) {
