@@ -286,6 +286,34 @@
         }
         @media print { body::before, .navbar::after { display: none !important; } }
 
+        .banner-thumb { width: 150px; height: 56px; object-fit: cover; border-radius: 8px; background: #1e293b; }
+        /* ---- Promo banner carousel ---- */
+        .banner-wrap { border-radius: 16px; overflow: hidden; background: #121622; }
+        .banner-wrap.rgb-ring::before { z-index: 5; }
+        .banner-wrap .carousel-item { height: 230px; background: linear-gradient(135deg, #1e293b, #0f172a); }
+        .banner-wrap .carousel-item img { width: 100%; height: 100%; object-fit: cover; display: block; }
+        .banner-wrap .carousel-item.active img { animation: kenburns 7s ease-out both; }
+        @keyframes kenburns { from { transform: scale(1); } to { transform: scale(1.1); } }
+        .banner-overlay { position: absolute; inset: 0; background: linear-gradient(90deg, rgba(11,14,20,.88) 0%, rgba(11,14,20,.45) 45%, rgba(11,14,20,.05) 100%); }
+        .banner-caption { position: absolute; left: 32px; top: 50%; transform: translateY(-50%); max-width: 70%; z-index: 2; }
+        .banner-title { font-size: 1.9rem; font-weight: 700; color: #ffd700; text-shadow: 0 2px 12px rgba(0,0,0,.6); line-height: 1.25; }
+        .banner-sub { margin-top: 6px; color: #e2e8f0; font-size: 1.05rem; text-shadow: 0 2px 8px rgba(0,0,0,.6); }
+        .banner-wrap .carousel-item.active .banner-caption { animation: captionIn .7s ease .15s backwards; }
+        @keyframes captionIn { from { opacity: 0; transform: translate(-24px, -50%); } to { opacity: 1; transform: translate(0, -50%); } }
+        .banner-wrap .carousel-indicators { margin-bottom: 10px; z-index: 6; }
+        .banner-wrap .carousel-indicators [data-bs-target] { width: 10px; height: 10px; border-radius: 50%; border: 0; background-color: rgba(255,255,255,.55); transition: all .3s ease; }
+        .banner-wrap .carousel-indicators .active { width: 28px; border-radius: 6px; background-color: #ffd700; box-shadow: 0 0 10px rgba(255,215,0,.7); }
+        .banner-wrap .carousel-control-prev, .banner-wrap .carousel-control-next { width: 56px; z-index: 6; opacity: 0; transition: opacity .25s ease; }
+        .banner-wrap:hover .carousel-control-prev, .banner-wrap:hover .carousel-control-next { opacity: 1; }
+        .banner-arrow { width: 38px; height: 38px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: rgba(11,14,20,.65); color: #ffd700; border: 1px solid rgba(255,215,0,.4); }
+        @media (max-width: 767.98px) {
+            .banner-wrap .carousel-item { height: 140px; }
+            .banner-caption { left: 16px; max-width: 80%; }
+            .banner-title { font-size: 1.05rem; }
+            .banner-sub { font-size: .8rem; margin-top: 2px; }
+            .banner-wrap .carousel-control-prev, .banner-wrap .carousel-control-next { display: none; }
+        }
+
         /* Toast notification */
         .toast-container {
             position: fixed;
@@ -404,11 +432,25 @@
     <!-- SECTION 1: PUBLIC SHOP / POS VIEW -->
     <div id="posSection" class="container-fluid px-4 py-4">
         
+        <!-- PROMO BANNER (loaded from /api/banners, managed in Admin) -->
+        <div id="bannerWrap" class="banner-wrap rgb-ring mb-4 d-none">
+            <div id="promoBanner" class="carousel slide carousel-fade">
+                <div class="carousel-indicators" id="bannerIndicators"></div>
+                <div class="carousel-inner" id="bannerInner"></div>
+                <button class="carousel-control-prev" type="button" data-bs-target="#promoBanner" data-bs-slide="prev" aria-label="Previous">
+                    <span class="banner-arrow"><i class="fa-solid fa-chevron-left"></i></span>
+                </button>
+                <button class="carousel-control-next" type="button" data-bs-target="#promoBanner" data-bs-slide="next" aria-label="Next">
+                    <span class="banner-arrow"><i class="fa-solid fa-chevron-right"></i></span>
+                </button>
+            </div>
+        </div>
+
         <!-- Category & Search Bar -->
         <div class="glass-card p-3 mb-4 d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
             <div>
                 <h4 class="fw-bold text-gold mb-1"><i class="fa-solid fa-boxes-stacked me-2"></i>កម្មង់ទំនិញ កាហ្វេ ម្លប់ដូង</h4>
-                <p class="text-secondary small mb-0">ជ្រើសរើសទំនិញ ឬភេសជ្ជៈ ដើម្បីបន្ថែមចូលក្នុងកន្ត្រក និងធ្វើការកម្ម៉ង់ រួចធ្វើការដាក់ឈ្មោះរួមទាំងលេខតុផងដែរ សូមអរគុណ</p>
+                <p class="text-secondary small mb-0">ជ្រើសរើសទំនិញ ឬភេសជ្ជៈ ដើម្បីបន្ថែមចូលក្នុងកន្ត្រក និងធ្វើការកម្ម៉ង់</p>
             </div>
             
             <div class="d-flex flex-wrap align-items-center gap-2">
@@ -459,6 +501,9 @@
                 <button id="adminSubOrders" class="btn btn-outline-gold rounded-pill px-4 fw-bold position-relative" onclick="switchAdminSub('orders')">
                     <i class="fa-solid fa-list-check me-1"></i> ការកម្ម៉ង់
                     <span id="kdsPendingBadge" class="badge rounded-pill bg-danger ms-1" style="font-size: 0.75rem;">0</span>
+                </button>
+                <button id="adminSubBanners" class="btn btn-outline-gold rounded-pill px-4 fw-bold" onclick="switchAdminSub('banners')">
+                    <i class="fa-solid fa-images me-1"></i> Banner
                 </button>
             </div>
 
@@ -589,6 +634,20 @@
                     </div>
                 </div>
 
+            </div>
+
+            <!-- PANE 3: BANNERS -->
+            <div id="adminBannersPane" class="d-none">
+                <div class="glass-card p-4 mb-4 d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
+                    <div>
+                        <h4 class="fw-bold text-gold mb-1"><i class="fa-solid fa-images me-2"></i>គ្រប់គ្រង Banner (ផ្ទាំងរូបភាពវិលជុំ)</h4>
+                        <p class="text-secondary small mb-0">រូបទាំងនេះបង្ហាញនៅទំព័រដើមរបស់ភ្ញៀវ។ ទំហំណែនាំ: 1200×400 (រូបទទឹងវែង)។ អាចរៀបលំដាប់ដោយព្រួញ ឡើង/ចុះ។</p>
+                    </div>
+                    <button class="btn btn-gold rounded-pill px-3 py-2 fw-bold" onclick="openBannerModal()">
+                        <i class="fa-solid fa-circle-plus me-1"></i> បន្ថែម Banner
+                    </button>
+                </div>
+                <div id="adminBannersList"></div>
             </div>
 
             <!-- PANE 2: ORDERS (moved from the old public KDS tab) -->
@@ -815,6 +874,64 @@
                             <button type="submit" class="btn btn-gold rounded-pill px-4 fw-bold" id="btnSaveProduct">
                                 <i class="fa-solid fa-floppy-disk me-1"></i> រក្សាទុកទំនិញ
                             </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: ADD / EDIT BANNER -->
+    <div class="modal fade" id="bannerFormModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered modal-lg">
+            <div class="modal-content glass-card border-0 text-white" style="background: rgba(15, 18, 26, 0.98);">
+                <div class="modal-header border-bottom border-secondary border-opacity-25">
+                    <h5 class="modal-title fw-bold text-gold" id="bannerModalTitle"><i class="fa-solid fa-image me-2"></i>បន្ថែម Banner</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body py-3">
+                    <form id="bannerForm" onsubmit="saveBannerHandler(event)">
+                        <input type="hidden" id="bannerId" value="">
+                        <div class="row g-3 mb-3">
+                            <div class="col-md-6">
+                                <label class="form-label text-gold small fw-bold">ចំណងជើង (Title)</label>
+                                <input type="text" maxlength="80" class="form-control bg-dark text-white border-secondary" id="bannerTitle" placeholder="ឧ. បញ្ចុះតម្លៃពិសេស!">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label text-gold small fw-bold">អត្ថបទរង (Subtitle)</label>
+                                <input type="text" maxlength="120" class="form-control bg-dark text-white border-secondary" id="bannerSubtitle" placeholder="ឧ. កាហ្វេគ្រប់មុខ បញ្ចុះ 20%">
+                            </div>
+                        </div>
+                        <div class="row g-3 mb-3">
+                            <div class="col-md-6">
+                                <label class="form-label text-gold small fw-bold">ជ្រើសរើសរូបភាពពីម៉ាស៊ីន (Upload) <span class="text-danger">*</span></label>
+                                <input type="file" class="form-control bg-dark text-white border-secondary" id="bannerImageFile" accept="image/*" onchange="handleBannerFileSelect(event)">
+                                <small class="text-secondary d-block mt-1">JPG, PNG, WEBP (អតិបរមា 5MB)</small>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label text-gold small fw-bold">ឬបញ្ចូល Image URL</label>
+                                <input type="url" class="form-control bg-dark text-white border-secondary" id="bannerImageUrl" placeholder="https://example.com/banner.jpg" oninput="handleBannerUrlInput(this.value)">
+                            </div>
+                        </div>
+                        <div class="row g-3 mb-3">
+                            <div class="col-md-4">
+                                <label class="form-label text-gold small fw-bold">ស្ថានភាព</label>
+                                <select class="form-select bg-dark text-white border-secondary" id="bannerStatus">
+                                    <option value="active">បង្ហាញ (Active)</option>
+                                    <option value="inactive">លាក់ (Inactive)</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label text-gold small fw-bold">រូបភាពមើលជាមុន</label>
+                            <div class="img-preview-box" style="height:160px;">
+                                <span class="text-secondary" id="bannerPreviewPlaceholder"><i class="fa-solid fa-image me-1"></i> មិនទាន់មានរូបភាព</span>
+                                <img id="bannerPreviewImg" src="" alt="Preview" class="d-none">
+                            </div>
+                        </div>
+                        <div class="d-flex justify-content-end gap-2 pt-2 border-top border-secondary border-opacity-25">
+                            <button type="button" class="btn btn-secondary rounded-pill px-4" data-bs-dismiss="modal">បោះបង់</button>
+                            <button type="submit" class="btn btn-gold rounded-pill px-4 fw-bold"><i class="fa-solid fa-floppy-disk me-1"></i> រក្សាទុក</button>
                         </div>
                     </form>
                 </div>
@@ -1216,6 +1333,175 @@
             }
         }
 
+        // ----------------------------------------------------
+        // PROMO BANNERS (public carousel + admin management)
+        // ----------------------------------------------------
+        let banners = [];
+        let bannersSig = '';
+        let adminBanners = [];
+        let bannerModalInstance = null;
+
+        async function loadBanners() {
+            try {
+                const list = await api('/api/banners');
+                const sig = JSON.stringify(list);
+                if (sig !== bannersSig) { banners = list; bannersSig = sig; renderBannerCarousel(); }
+            } catch (_) { /* offline */ }
+        }
+
+        function renderBannerCarousel() {
+            const wrap = document.getElementById('bannerWrap');
+            const el = document.getElementById('promoBanner');
+            const old = bootstrap.Carousel.getInstance(el);
+            if (old) old.dispose();
+            if (!banners.length) { wrap.classList.add('d-none'); return; }
+            wrap.classList.remove('d-none');
+
+            document.getElementById('bannerInner').innerHTML = banners.map((b, i) => `
+                <div class="carousel-item ${i === 0 ? 'active' : ''}">
+                    <img src="${esc(imgUrl(b.image))}" alt="${esc(b.title)}" ${i === 0 ? '' : 'loading="lazy"'}>
+                    ${(b.title || b.subtitle) ? `
+                        <div class="banner-overlay"></div>
+                        <div class="banner-caption">
+                            ${b.title ? `<div class="banner-title">${esc(b.title)}</div>` : ''}
+                            ${b.subtitle ? `<div class="banner-sub">${esc(b.subtitle)}</div>` : ''}
+                        </div>` : ''}
+                </div>`).join('');
+
+            const multi = banners.length > 1;
+            document.getElementById('bannerIndicators').innerHTML = multi
+                ? banners.map((_, i) => `<button type="button" data-bs-target="#promoBanner" data-bs-slide-to="${i}" ${i === 0 ? 'class="active" aria-current="true"' : ''} aria-label="Slide ${i + 1}"></button>`).join('')
+                : '';
+            el.querySelectorAll('.carousel-control-prev, .carousel-control-next').forEach(b => b.classList.toggle('d-none', !multi));
+            if (multi) new bootstrap.Carousel(el, { interval: 4000, ride: 'carousel', touch: true });
+        }
+
+        // ---- Admin ----
+        async function loadAdminBanners() {
+            if (!isAdminLoggedIn) return;
+            try { adminBanners = await api('/api/admin/banners', { auth: true }); renderAdminBanners(); }
+            catch (err) { alert(err.message); }
+        }
+
+        function renderAdminBanners() {
+            const box = document.getElementById('adminBannersList');
+            if (!adminBanners.length) {
+                box.innerHTML = '<div class="glass-card p-4 text-center text-secondary">មិនទាន់មាន Banner ទេ — ចុច "បន្ថែម Banner"</div>';
+                return;
+            }
+            box.innerHTML = adminBanners.map((b, i) => `
+                <div class="glass-card p-3 mb-2 d-flex flex-wrap align-items-center gap-3 ${b.status === 'inactive' ? 'opacity-50' : ''}">
+                    <img class="banner-thumb" src="${esc(imgUrl(b.image))}" alt="" onerror="this.removeAttribute('src')">
+                    <div class="flex-grow-1" style="min-width:160px;">
+                        <div class="fw-bold text-white">${esc(b.title || '(គ្មានចំណងជើង)')}</div>
+                        <small class="text-secondary">${esc(b.subtitle || '')}</small>
+                    </div>
+                    <button class="btn btn-sm ${b.status === 'active' ? 'btn-outline-success' : 'btn-outline-secondary'} rounded-pill" onclick="toggleBannerStatus(${b.id})">
+                        ${b.status === 'active' ? '<i class="fa-solid fa-eye me-1"></i>បង្ហាញ' : '<i class="fa-solid fa-eye-slash me-1"></i>លាក់'}
+                    </button>
+                    <div class="btn-group btn-group-sm">
+                        <button class="btn btn-outline-light" ${i === 0 ? 'disabled' : ''} onclick="moveBanner(${b.id}, -1)" title="ឡើងលើ"><i class="fa-solid fa-arrow-up"></i></button>
+                        <button class="btn btn-outline-light" ${i === adminBanners.length - 1 ? 'disabled' : ''} onclick="moveBanner(${b.id}, 1)" title="ចុះក្រោម"><i class="fa-solid fa-arrow-down"></i></button>
+                    </div>
+                    <div class="btn-group btn-group-sm">
+                        <button class="btn btn-outline-gold" onclick="openBannerModal(${b.id})" title="កែប្រែ"><i class="fa-solid fa-pen-to-square"></i></button>
+                        <button class="btn btn-outline-danger" onclick="deleteBanner(${b.id})" title="លុប"><i class="fa-solid fa-trash"></i></button>
+                    </div>
+                </div>`).join('');
+        }
+
+        function setBannerPreview(src) {
+            const img = document.getElementById('bannerPreviewImg');
+            const ph = document.getElementById('bannerPreviewPlaceholder');
+            if (src) { img.src = src; img.classList.remove('d-none'); ph.classList.add('d-none'); }
+            else { img.removeAttribute('src'); img.classList.add('d-none'); ph.classList.remove('d-none'); }
+        }
+
+        function openBannerModal(id) {
+            if (!bannerModalInstance) bannerModalInstance = new bootstrap.Modal(document.getElementById('bannerFormModal'));
+            document.getElementById('bannerForm').reset();
+            const b = id ? adminBanners.find(x => x.id === id) : null;
+            document.getElementById('bannerId').value = b ? b.id : '';
+            document.getElementById('bannerTitle').value = b ? b.title : '';
+            document.getElementById('bannerSubtitle').value = b ? b.subtitle : '';
+            document.getElementById('bannerStatus').value = b ? b.status : 'active';
+            document.getElementById('bannerImageUrl').value = (b && !b.image.startsWith('/uploads/')) ? b.image : '';
+            document.getElementById('bannerModalTitle').innerHTML = b
+                ? '<i class="fa-solid fa-pen-to-square me-2"></i>កែប្រែ Banner'
+                : '<i class="fa-solid fa-image me-2"></i>បន្ថែម Banner';
+            setBannerPreview(b ? imgUrl(b.image) : '');
+            bannerModalInstance.show();
+        }
+
+        function handleBannerFileSelect(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            if (file.size > 5 * 1024 * 1024) { alert('ទំហំរូបភាពធំពេក! សូមជ្រើសរើសរូបភាពតូចជាង 5MB'); e.target.value = ''; return; }
+            const r = new FileReader();
+            r.onload = ev => { setBannerPreview(ev.target.result); document.getElementById('bannerImageUrl').value = ''; };
+            r.readAsDataURL(file);
+        }
+        function handleBannerUrlInput(url) {
+            url = url.trim();
+            if (url) { setBannerPreview(url); document.getElementById('bannerImageFile').value = ''; }
+        }
+
+        async function saveBannerHandler(e) {
+            e.preventDefault();
+            if (!isAdminLoggedIn) return;
+            const id = document.getElementById('bannerId').value;
+            try {
+                let image = document.getElementById('bannerImageUrl').value.trim();
+                const file = document.getElementById('bannerImageFile').files[0];
+                if (file) {
+                    const fd = new FormData();
+                    fd.append('image', file);
+                    image = (await api('/api/admin/upload', { method: 'POST', auth: true, form: fd })).url;
+                } else if (!image && id) {
+                    const old = adminBanners.find(x => x.id === Number(id));
+                    image = old ? old.image : '';
+                }
+                if (!image) { alert('សូមជ្រើសរើសរូបភាព ឬបញ្ចូល Image URL'); return; }
+                const body = {
+                    title: document.getElementById('bannerTitle').value.trim(),
+                    subtitle: document.getElementById('bannerSubtitle').value.trim(),
+                    status: document.getElementById('bannerStatus').value,
+                    image
+                };
+                if (id) await api('/api/admin/banners/' + id, { method: 'PUT', auth: true, body });
+                else await api('/api/admin/banners', { method: 'POST', auth: true, body });
+                bannerModalInstance.hide();
+                await loadAdminBanners();
+                await loadBanners();
+                showToast(id ? 'បានកែប្រែ Banner!' : 'បានបន្ថែម Banner ថ្មី!');
+            } catch (err) { alert(err.message); }
+        }
+
+        async function toggleBannerStatus(id) {
+            const b = adminBanners.find(x => x.id === id);
+            if (!b) return;
+            try {
+                await api('/api/admin/banners/' + id, { method: 'PATCH', auth: true, body: { status: b.status === 'active' ? 'inactive' : 'active' } });
+                await loadAdminBanners(); await loadBanners();
+            } catch (err) { alert(err.message); }
+        }
+
+        async function moveBanner(id, dir) {
+            try {
+                await api(`/api/admin/banners/${id}/move`, { method: 'POST', auth: true, body: { dir } });
+                await loadAdminBanners(); await loadBanners();
+            } catch (err) { alert(err.message); }
+        }
+
+        async function deleteBanner(id) {
+            if (!confirm('តើអ្នកពិតជាចង់លុប Banner នេះមែនទេ?')) return;
+            try {
+                await api('/api/admin/banners/' + id, { method: 'DELETE', auth: true });
+                await loadAdminBanners(); await loadBanners();
+                showToast('បានលុប Banner រួចរាល់!');
+            } catch (err) { alert(err.message); }
+        }
+
         // Entrance animation only for items we haven't shown yet (polling re-renders won't replay it)
         const seenProducts = new Set();
         const seenOrderCards = new Set();
@@ -1284,7 +1570,7 @@
             setInterval(updateClock, 1000);
 
             // Load data from Backend (orders only load when admin is logged in)
-            await Promise.all([loadProductsFromDb(), refreshOrders()]);
+            await Promise.all([loadProductsFromDb(), refreshOrders(), loadBanners()]);
             renderPosProducts();
             renderCart();
             renderDashboard();
@@ -1301,6 +1587,7 @@
                 await loadProductsFromDb();
                 renderPosProducts();
                 renderAdminTable();
+                loadBanners();
             }, 30000);
         });
 
@@ -1338,14 +1625,15 @@
 
         // Admin sub-tabs: Products / Orders
         function switchAdminSub(sub) {
-            const isOrders = sub === 'orders';
-            document.getElementById('adminProductsPane').classList.toggle('d-none', isOrders);
-            document.getElementById('adminOrdersPane').classList.toggle('d-none', !isOrders);
-            document.getElementById('adminSubProducts').className =
-                'btn rounded-pill px-4 fw-bold ' + (isOrders ? 'btn-outline-gold' : 'btn-gold');
-            document.getElementById('adminSubOrders').className =
-                'btn rounded-pill px-4 fw-bold position-relative ' + (isOrders ? 'btn-gold' : 'btn-outline-gold');
-            if (isOrders) refreshOrders().then(renderDashboard);
+            const panes = { products: 'adminProductsPane', orders: 'adminOrdersPane', banners: 'adminBannersPane' };
+            const btns = { products: 'adminSubProducts', orders: 'adminSubOrders', banners: 'adminSubBanners' };
+            for (const k in panes) {
+                document.getElementById(panes[k]).classList.toggle('d-none', k !== sub);
+                document.getElementById(btns[k]).className = 'btn rounded-pill px-4 fw-bold ' +
+                    (k === 'orders' ? 'position-relative ' : '') + (k === sub ? 'btn-gold' : 'btn-outline-gold');
+            }
+            if (sub === 'orders') refreshOrders().then(renderDashboard);
+            if (sub === 'banners') loadAdminBanners();
         }
 
         // ----------------------------------------------------
