@@ -112,6 +112,29 @@ if (!db.prepare('PRAGMA table_info(products)').all().some((c) => c.name === 'dis
   db.exec('ALTER TABLE products ADD COLUMN discount INTEGER NOT NULL DEFAULT 0');
 }
 
+// Promo banners (managed by admin, shown on the POS home screen)
+db.exec(`
+CREATE TABLE IF NOT EXISTS banners (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL DEFAULT '',
+  subtitle TEXT NOT NULL DEFAULT '',
+  image TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+`);
+if (db.prepare('SELECT COUNT(*) AS n FROM banners').get().n === 0) {
+  const insB = db.prepare('INSERT INTO banners (title, subtitle, image, sort_order) VALUES (?, ?, ?, ?)');
+  const defaults = [
+    ['កាហ្វេត្រជាក់ ស្រស់ស្រាយ', 'ជ្រើសរើសកាហ្វេដែលអ្នកស្រលាញ់ ថ្ងៃនេះ', 'https://images.unsplash.com/photo-1517701604599-bb29b565090c?auto=format&fit=crop&w=1200&q=75'],
+    ['តែបៃតង & ម៉ាត់ឆាឡាតេ', 'ក្លិនឈ្ងុយ ផ្អែមល្មម ត្រជាក់ស្រួល', 'https://images.unsplash.com/photo-1515823662972-da6a2e4d3002?auto=format&fit=crop&w=1200&q=75'],
+    ['នំប័ុងក្តៅៗ ស្រួយឆ្ងាញ់', 'ញ៉ាំជាមួយកាហ្វេ ពិសេសបំផុត', 'https://images.unsplash.com/photo-1555507036-ab1f4038808a?auto=format&fit=crop&w=1200&q=75'],
+    ['ភេសជ្ជៈស្រស់ ត្រជាក់បេះដូង', 'ផាសិនសូដា និងភេសជ្ជៈជាច្រើនទៀត', 'https://images.unsplash.com/photo-1513558161293-cdaf765ed2fd?auto=format&fit=crop&w=1200&q=75'],
+  ];
+  tx(() => defaults.forEach((d, i) => insB.run(d[0], d[1], d[2], i)))();
+}
+
 // Seed admin (first run only)
 if (db.prepare('SELECT COUNT(*) AS n FROM admins').get().n === 0) {
   const u = process.env.ADMIN_USERNAME || 'admin';
@@ -132,7 +155,7 @@ if (db.prepare('SELECT COUNT(*) AS n FROM products').get().n === 0) {
     { id: 'prod-2', name: 'Iced Americano (អាមេរិកខាណូ)', category: 'coffee', price: 2.0, stock: 60, description: 'កាហ្វេខ្មៅស្រស់ ក្លិនឈ្ងុយពិសារ', image: u('photo-1514432324607-a09d9b4aefdd') },
     { id: 'prod-3', name: 'Iced Caramel Macchiato', category: 'coffee', price: 2.85, stock: 30, description: 'កាហ្វេការ៉ាមែលផ្អែមល្មម ឈ្ងុយឆ្ងាញ់', image: u('photo-1485808191679-5f86510681a2') },
     { id: 'prod-4', name: 'Iced Matcha Latte (ម៉ាត់ឆាឡាតេ)', category: 'tea', price: 2.75, stock: 20, description: 'តែបៃតងជប៉ុន ម៉ាត់ឆាដើម', image: u('photo-1515823662972-da6a2e4d3002') },
-    { id: 'prod-5', name: ' Milk Tea (តៃគុជទឹកដោះគោ)', category: 'tea', price: 2.25, stock: 0, description: 'តែគុជឈ្ងុយឆ្ងាញ់ ជាមួយទឹកដោះគោស្រស់', image: u('photo-1558857563-b371033873b8') },
+    { id: 'prod-5', name: 'Thai Milk Tea (តែថៃទឹកដោះគោ)', category: 'tea', price: 2.25, stock: 0, description: 'តែថៃឈ្ងុយឆ្ងាញ់ ជាមួយទឹកដោះគោស្រស់', image: u('photo-1558857563-b371033873b8') },
     { id: 'prod-6', name: 'Passion Soda (ផាសិនសូដា)', category: 'drink', price: 2.3, stock: 50, description: 'ផាសិនស្រស់ លាយសូដាត្រជាក់បកបេះដូង', image: u('photo-1513558161293-cdaf765ed2fd') },
     { id: 'prod-7', name: 'Butter Croissant (នំប័ុងក្រូសង់)', category: 'bakery', price: 1.8, stock: 15, description: 'នំប័ុងក្រូសង់ប៊័រស្រស់ ក្តៅៗស្រួយឆ្ងាញ់', image: u('photo-1555507036-ab1f4038808a') },
   ];
@@ -174,6 +197,32 @@ const seqFromOrderId = (id) => {
   const m = /^ORD-(\d+)$/.exec(String(id));
   return m ? Number(m[1]) - 1000 : NaN;
 };
+
+const bannerOut = (r) => ({
+  id: r.id, title: r.title, subtitle: r.subtitle, image: r.image, status: r.status, sortOrder: r.sort_order,
+});
+
+// Same rule as products: only our own uploads or http(s) URLs
+function parseImage(v, required) {
+  const img = String(v ?? '').trim();
+  if (required && !img) throw new HttpError(400, 'សូមជ្រើសរើសរូបភាព');
+  if (img && !/^(\/uploads\/[\w.-]+|https?:\/\/[^\s]+)$/i.test(img)) throw new HttpError(400, 'រូបភាពមិនត្រឹមត្រូវ');
+  return img;
+}
+function parseBanner(body) {
+  const title = String(body.title ?? '').trim();
+  const subtitle = String(body.subtitle ?? '').trim();
+  if (title.length > 80) throw new HttpError(400, 'ចំណងជើងវែងពេក (អតិបរមា 80)');
+  if (subtitle.length > 120) throw new HttpError(400, 'អត្ថបទរងវែងពេក (អតិបរមា 120)');
+  if (!['active', 'inactive'].includes(body.status ?? 'active')) throw new HttpError(400, 'ស្ថានភាពមិនត្រឹមត្រូវ');
+  return { title, subtitle, image: parseImage(body.image, true), status: body.status ?? 'active' };
+}
+// Delete an uploaded file only when nothing else still uses it
+function removeUploadIfUnused(img) {
+  if (!img || !img.startsWith('/uploads/')) return;
+  const still = db.prepare('SELECT 1 FROM products WHERE image = ? UNION SELECT 1 FROM banners WHERE image = ?').get(img, img);
+  if (!still) fs.unlink(path.join(UPLOAD_DIR, path.basename(img)), () => {});
+}
 
 // Validation for product payloads
 function parseProduct(body, { partial = false } = {}) {
@@ -300,6 +349,12 @@ app.get('/api/products', (req, res) => {
   res.json(rows.map(productOut));
 });
 
+// Active promo banners for the POS home screen
+app.get('/api/banners', (req, res) => {
+  const rows = db.prepare(`SELECT * FROM banners WHERE status = 'active' ORDER BY sort_order, id`).all();
+  res.json(rows.map(bannerOut));
+});
+
 // Limit order spam from the public customer screen
 const orderLimiter = rateLimit({ windowMs: 60 * 1000, max: 15, standardHeaders: true, legacyHeaders: false,
   message: { error: 'កម្ម៉ង់ញឹកពេក សូមរង់ចាំបន្តិច' } });
@@ -395,7 +450,7 @@ admin.delete('/products/:id', (req, res) => {
   db.prepare('DELETE FROM products WHERE id = ?').run(req.params.id);
   // Remove the uploaded file if it was ours and nothing else uses it
   if (p.image.startsWith('/uploads/')) {
-    const still = db.prepare('SELECT 1 FROM products WHERE image = ?').get(p.image);
+    const still = db.prepare('SELECT 1 FROM products WHERE image = ? UNION SELECT 1 FROM banners WHERE image = ?').get(p.image, p.image);
     if (!still) fs.unlink(path.join(UPLOAD_DIR, path.basename(p.image)), () => {});
   }
   res.json({ ok: true });
@@ -418,6 +473,64 @@ admin.get('/stats', (req, res) => {
     products: { total: p.total, active: p.active || 0, outOfStock: p.outOfStock || 0, lowStock: p.lowStock || 0 },
     today: { orders: o.orders, revenue: Math.round(o.revenue * 100) / 100 },
   });
+});
+
+// ---------------- Admin: Banners (JWT required) ----------------
+admin.get('/banners', (req, res) => {
+  res.json(db.prepare('SELECT * FROM banners ORDER BY sort_order, id').all().map(bannerOut));
+});
+
+admin.post('/banners', (req, res) => {
+  if (db.prepare('SELECT COUNT(*) AS n FROM banners').get().n >= 20) throw new HttpError(400, 'Banner ច្រើនពេក (អតិបរមា 20)');
+  const d = parseBanner(req.body);
+  const next = db.prepare('SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM banners').get().n;
+  const { lastInsertRowid: id } = db.prepare('INSERT INTO banners (title, subtitle, image, status, sort_order) VALUES (?, ?, ?, ?, ?)')
+    .run(d.title, d.subtitle, d.image, d.status, next);
+  res.status(201).json(bannerOut(db.prepare('SELECT * FROM banners WHERE id = ?').get(id)));
+});
+
+admin.put('/banners/:id', (req, res) => {
+  const id = Number(req.params.id);
+  const old = db.prepare('SELECT * FROM banners WHERE id = ?').get(id);
+  if (!old) throw new HttpError(404, 'រកមិនឃើញ Banner');
+  const d = parseBanner(req.body);
+  db.prepare('UPDATE banners SET title = ?, subtitle = ?, image = ?, status = ? WHERE id = ?').run(d.title, d.subtitle, d.image, d.status, id);
+  if (old.image !== d.image) removeUploadIfUnused(old.image);
+  res.json(bannerOut(db.prepare('SELECT * FROM banners WHERE id = ?').get(id)));
+});
+
+admin.patch('/banners/:id', (req, res) => {
+  const id = Number(req.params.id);
+  if (!['active', 'inactive'].includes(req.body.status)) throw new HttpError(400, 'ស្ថានភាពមិនត្រឹមត្រូវ');
+  const r = db.prepare('UPDATE banners SET status = ? WHERE id = ?').run(req.body.status, id);
+  if (!r.changes) throw new HttpError(404, 'រកមិនឃើញ Banner');
+  res.json(bannerOut(db.prepare('SELECT * FROM banners WHERE id = ?').get(id)));
+});
+
+admin.post('/banners/:id/move', (req, res) => {
+  const id = Number(req.params.id);
+  const dir = Number(req.body.dir) < 0 ? -1 : 1;
+  tx(() => {
+    const list = db.prepare('SELECT id FROM banners ORDER BY sort_order, id').all();
+    const i = list.findIndex((b) => b.id === id);
+    if (i < 0) throw new HttpError(404, 'រកមិនឃើញ Banner');
+    const j = i + dir;
+    if (j >= 0 && j < list.length) {
+      [list[i], list[j]] = [list[j], list[i]];
+      const upd = db.prepare('UPDATE banners SET sort_order = ? WHERE id = ?');
+      list.forEach((b, k) => upd.run(k, b.id));
+    }
+  })();
+  res.json({ ok: true });
+});
+
+admin.delete('/banners/:id', (req, res) => {
+  const id = Number(req.params.id);
+  const b = db.prepare('SELECT * FROM banners WHERE id = ?').get(id);
+  if (!b) throw new HttpError(404, 'រកមិនឃើញ Banner');
+  db.prepare('DELETE FROM banners WHERE id = ?').run(id);
+  removeUploadIfUnused(b.image);
+  res.json({ ok: true });
 });
 
 // ---------------- Admin: Orders (JWT required) ----------------
