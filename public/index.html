@@ -322,11 +322,30 @@
             z-index: 1090;
         }
 
-        /* Print Receipt Style */
+        /* ---- Receipt (thermal 80mm) ---- */
+        #receiptModal .modal-dialog { max-width: 330px; }
+        .receipt-paper { background: #fff; color: #000; font-family: 'Kantumruy Pro', sans-serif; font-size: 13px; line-height: 1.35; }
+        .receipt-paper .rc-shop { font-size: 18px; font-weight: 700; }
+        .receipt-paper .rc-sub { font-size: 11px; letter-spacing: 1px; }
+        .receipt-paper .rc-info div { display: flex; justify-content: space-between; gap: 8px; }
+        .receipt-paper .rc-sep { border: 0; border-top: 1px dashed #000; margin: 6px 0; opacity: 1; }
+        .receipt-paper .rc-item { margin-bottom: 6px; }
+        .receipt-paper .rc-name { font-weight: 600; word-break: break-word; }
+        .receipt-paper .rc-meta { font-size: 11px; }
+        .receipt-paper .rc-row { display: flex; justify-content: space-between; gap: 8px; }
+        .receipt-paper .rc-total { font-size: 17px; font-weight: 700; }
+
+        /* Print: 80mm thermal paper (printable width ~72mm) */
+        @page { size: 80mm auto; margin: 0; }
         @media print {
-            body * { visibility: hidden; }
-            #receiptModal .modal-content, #receiptModal .modal-content * { visibility: visible; }
-            #receiptModal .modal-content { position: absolute; left: 0; top: 0; width: 100%; color: #000 !important; background: #fff !important; }
+            html, body { margin: 0 !important; padding: 0 !important; background: #fff !important; min-height: 0 !important; }
+            body > *:not(#receiptModal) { display: none !important; }
+            .modal-backdrop { display: none !important; }
+            #receiptModal { position: static !important; display: block !important; overflow: visible !important; opacity: 1 !important; }
+            #receiptModal .modal-dialog { position: static; width: 72mm; max-width: 72mm; margin: 0 auto !important; transform: none !important; }
+            #receiptModal .modal-content { border: 0 !important; box-shadow: none !important; border-radius: 0 !important; padding: 2mm 0 6mm !important; background: #fff !important; color: #000 !important; width: 72mm; animation: none !important; }
+            .receipt-paper { font-size: 12px; color: #000 !important; }
+            .receipt-paper * { color: #000 !important; }
             .no-print { display: none !important; }
         }
 
@@ -1128,10 +1147,10 @@
     <!-- MODAL 5: RECEIPT PRINTING -->
     <div class="modal fade" id="receiptModal" tabindex="-1" aria-hidden="true">
         <div class="modal-dialog modal-dialog-centered modal-sm">
-            <div class="modal-content text-dark p-3" style="background: #fff; font-family: monospace;">
+            <div class="modal-content text-dark p-3 receipt-paper">
                 <div class="text-center border-bottom pb-2 mb-2">
-                    <h5 class="fw-bold mb-0">កាហ្វេ ម្លប់ដូង</h5>
-                    <small>MLOB DOUNG COFFEE - RECEIPT</small>
+                    <div class="rc-shop">កាហ្វេ ម្លប់ដូង</div>
+                    <div class="rc-sub">MLOB DOUNG COFFEE</div>
                 </div>
                 <div id="receiptContent"></div>
                 <div class="border-top pt-2 mt-2 text-center small">
@@ -2490,27 +2509,30 @@
             const o = orders.find(item => item.id === orderId);
             if (!o) return;
 
+            const d = new Date(o.createdAt);
+            const dateStr = d.toLocaleDateString('en-GB') + ' ' + d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+            const qtyTotal = o.items.reduce((n, i) => n + i.quantity, 0);
+
             const itemsHtml = o.items.map(i => `
-                <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
-                    <div>${esc(i.name)} x${i.quantity}<br><small>(${esc(i.sugar)})</small>${i.note ? `<br><small>📝 ${esc(i.note)}</small>` : ''}</div>
-                    <div>$${(i.price * i.quantity).toFixed(2)}</div>
+                <div class="rc-item">
+                    <div class="rc-name">${esc(i.name)}</div>
+                    ${(i.sugar || i.note) ? `<div class="rc-meta">${i.sugar ? 'ស្ករ ' + esc(i.sugar) : ''}${i.sugar && i.note ? ' · ' : ''}${i.note ? 'ចំណាំ: ' + esc(i.note) : ''}</div>` : ''}
+                    <div class="rc-row"><span>${i.quantity} × $${i.price.toFixed(2)}</span><span>$${(i.price * i.quantity).toFixed(2)}</span></div>
                 </div>
             `).join('');
 
             document.getElementById('receiptContent').innerHTML = `
-                <div style="margin-bottom:8px; font-size:12px;">
-                    <div><strong>លេខវិក្កយបត្រ:</strong> ${o.id}</div>
-                    <div><strong>ឈ្មោះអតិថិជន:</strong> ${esc(o.customerName)}</div>
-                    <div><strong>លេខតុ:</strong> ${esc(o.tableNo)}</div>
-                    <div><strong>ម៉ោង:</strong> ${o.timestamp}</div>
+                <div class="rc-info">
+                    <div><span>វិក្កយបត្រ:</span><b>${o.id}</b></div>
+                    <div><span>កាលបរិច្ឆេទ:</span><span>${dateStr}</span></div>
+                    <div><span>អតិថិជន:</span><span>${esc(o.customerName)}</span></div>
+                    <div><span>លេខតុ:</span><span>${esc(o.tableNo)}</span></div>
                 </div>
-                <hr style="border-top:1px dashed #000; margin:8px 0;">
+                <hr class="rc-sep">
                 ${itemsHtml}
-                <hr style="border-top:1px dashed #000; margin:8px 0;">
-                <div style="display:flex; justify-content:space-between; font-weight:bold; font-size:14px;">
-                    <span>សរុប (TOTAL):</span>
-                    <span>$${o.total.toFixed(2)}</span>
-                </div>
+                <hr class="rc-sep">
+                <div class="rc-row"><span>ចំនួនសរុប</span><span>${qtyTotal}</span></div>
+                <div class="rc-row rc-total"><span>សរុប (TOTAL)</span><span>$${o.total.toFixed(2)}</span></div>
             `;
 
             receiptModalInstance.show();
