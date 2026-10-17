@@ -287,6 +287,23 @@
         @media print { body::before, .navbar::after { display: none !important; } }
 
         .banner-thumb { width: 150px; height: 56px; object-fit: cover; border-radius: 8px; background: #1e293b; }
+                /* ---- Reports ---- */
+        .rpt-chart { display: flex; align-items: flex-end; gap: 4px; height: 190px; overflow-x: auto; padding-bottom: 2px; }
+        .rpt-col { flex: 1 0 22px; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; }
+        .rpt-bar { width: 100%; border-radius: 6px 6px 0 0; background: linear-gradient(180deg, #ffd700, #ff9f1c); min-height: 2px; transition: height .5s ease; }
+        .rpt-col:hover .rpt-bar { filter: brightness(1.2); box-shadow: 0 0 12px rgba(255, 215, 0, .5); }
+        .rpt-val { font-size: .62rem; color: #e2e8f0; margin-bottom: 2px; white-space: nowrap; }
+        .rpt-lbl { font-size: .62rem; color: #94a3b8; margin-top: 4px; white-space: nowrap; }
+        .rpt-empty { color: #94a3b8; text-align: center; padding: 40px 0; }
+        /* ---- Customer order tracking ---- */
+        .trk-steps { display: flex; align-items: center; gap: 4px; margin: 10px 0; }
+        .trk-step { display: flex; flex-direction: column; align-items: center; gap: 4px; color: #64748b; min-width: 64px; }
+        .trk-dot { width: 18px; height: 18px; border-radius: 50%; background: #334155; border: 2px solid #475569; }
+        .trk-step.on { color: #ffd700; }
+        .trk-step.on .trk-dot { background: #ffd700; border-color: #ffd700; box-shadow: 0 0 10px rgba(255, 215, 0, .6); }
+        .trk-step.cur .trk-dot { animation: badgePulse 1.4s ease-out infinite; }
+        .trk-line { flex: 1; height: 2px; background: #334155; margin-bottom: 18px; }
+        
         /* ---- Promo banner carousel ---- */
         .banner-wrap { border-radius: 16px; overflow: hidden; background: #121622; }
         .banner-wrap.rgb-ring::before { z-index: 5; }
@@ -423,6 +440,12 @@
 
             <!-- Cart Trigger, Admin Status & Clock -->
             <div class="d-flex align-items-center gap-3">
+                <!-- Customer: track my orders -->
+                <button class="btn btn-outline-gold rounded-pill px-3 py-2 position-relative" id="btnMyOrders" type="button" onclick="openTrackModal()">
+                    <i class="fa-solid fa-receipt me-1"></i><span class="d-none d-sm-inline"> ការកម្ម៉ង់ខ្ញុំ</span>
+                    <span id="trackBadge" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger d-none">0</span>
+                </button>
+
                 <!-- Cart Button -->
                 <button class="btn btn-outline-gold rounded-pill px-3 py-2 position-relative rgb-ring" id="posCartBtn" type="button" data-bs-toggle="offcanvas" data-bs-target="#cartOffcanvas">
                     <i class="fa-solid fa-cart-shopping me-1"></i><span class="d-none d-sm-inline"> កន្ត្រក</span>
@@ -510,16 +533,22 @@
         <div id="adminMainContent">
 
             <!-- Sub tabs: Products / Orders -->
-            <div class="d-flex gap-2 mb-4">
-                <button id="adminSubProducts" class="btn btn-gold rounded-pill px-4 fw-bold" onclick="switchAdminSub('products')">
+            <div class="d-flex flex-wrap gap-2 mb-4">
+                <button id="adminSubProducts" data-owner class="btn btn-gold rounded-pill px-4 fw-bold" onclick="switchAdminSub('products')">
                     <i class="fa-solid fa-boxes-stacked me-1"></i> ទំនិញ
                 </button>
                 <button id="adminSubOrders" class="btn btn-outline-gold rounded-pill px-4 fw-bold position-relative" onclick="switchAdminSub('orders')">
                     <i class="fa-solid fa-list-check me-1"></i> ការកម្ម៉ង់
                     <span id="kdsPendingBadge" class="badge rounded-pill bg-danger ms-1" style="font-size: 0.75rem;">0</span>
                 </button>
-                <button id="adminSubBanners" class="btn btn-outline-gold rounded-pill px-4 fw-bold" onclick="switchAdminSub('banners')">
+                <button id="adminSubBanners" data-owner class="btn btn-outline-gold rounded-pill px-4 fw-bold" onclick="switchAdminSub('banners')">
                     <i class="fa-solid fa-images me-1"></i> Banner
+                </button>
+                <button id="adminSubReports" data-owner class="btn btn-outline-gold rounded-pill px-4 fw-bold" onclick="switchAdminSub('reports')">
+                    <i class="fa-solid fa-chart-column me-1"></i> របាយការណ៍
+                </button>
+                <button id="adminSubSettings" data-owner class="btn btn-outline-gold rounded-pill px-4 fw-bold" onclick="switchAdminSub('settings')">
+                    <i class="fa-solid fa-gear me-1"></i> ការកំណត់
                 </button>
             </div>
 
@@ -650,6 +679,96 @@
                     </div>
                 </div>
 
+            </div>
+
+            <!-- PANE 4: REPORTS -->
+            <div id="adminReportsPane" class="d-none">
+                <div class="glass-card p-4 mb-4">
+                    <div class="d-flex flex-column flex-xl-row justify-content-between gap-3">
+                        <div>
+                            <h4 class="fw-bold text-gold mb-1"><i class="fa-solid fa-chart-column me-2"></i>របាយការណ៍លក់</h4>
+                            <p class="text-secondary small mb-0">គណនាតាមម៉ោងកម្ពុជា មិនរាប់ការកម្ម៉ង់ដែលបានលុបចោល</p>
+                        </div>
+                        <div class="d-flex flex-wrap align-items-center gap-2" id="reportRangeBtns">
+                            <button class="btn btn-sm rounded-pill btn-outline-gold" data-range="today" onclick="setReportRange('today')">ថ្ងៃនេះ</button>
+                            <button class="btn btn-sm rounded-pill btn-gold" data-range="7d" onclick="setReportRange('7d')">៧ ថ្ងៃ</button>
+                            <button class="btn btn-sm rounded-pill btn-outline-gold" data-range="30d" onclick="setReportRange('30d')">៣០ ថ្ងៃ</button>
+                            <button class="btn btn-sm rounded-pill btn-outline-gold" data-range="month" onclick="setReportRange('month')">ខែនេះ</button>
+                            <input type="date" id="reportFrom" class="form-control form-control-sm bg-dark text-white border-secondary" style="width:auto;">
+                            <span class="text-secondary">→</span>
+                            <input type="date" id="reportTo" class="form-control form-control-sm bg-dark text-white border-secondary" style="width:auto;">
+                            <button class="btn btn-gold btn-sm rounded-pill px-3 fw-bold" onclick="loadReports()">មើល</button>
+                            <button class="btn btn-outline-gold btn-sm rounded-pill px-3" onclick="exportReport()"><i class="fa-solid fa-file-csv me-1"></i> Excel/CSV</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="row g-3 mb-4" id="reportSummary"></div>
+                <div class="row g-3 mb-4">
+                    <div class="col-lg-7"><div class="glass-card p-3 h-100"><h6 class="text-gold fw-bold mb-3"><i class="fa-solid fa-calendar-day me-2"></i>ចំណូលតាមថ្ងៃ ($)</h6><div id="reportDaily"></div></div></div>
+                    <div class="col-lg-5"><div class="glass-card p-3 h-100"><h6 class="text-gold fw-bold mb-3"><i class="fa-solid fa-clock me-2"></i>ម៉ោងដែលមានអ្នកកម្ម៉ង់ច្រើន (ចំនួនការកម្ម៉ង់)</h6><div id="reportHourly"></div></div></div>
+                </div>
+                <div class="row g-3 mb-4">
+                    <div class="col-lg-7"><div class="glass-card p-3 h-100"><h6 class="text-gold fw-bold mb-3"><i class="fa-solid fa-trophy me-2"></i>ទំនិញលក់ដាច់ (Top 10)</h6><div id="reportTop"></div></div></div>
+                    <div class="col-lg-5"><div class="glass-card p-3 h-100"><h6 class="text-gold fw-bold mb-3"><i class="fa-solid fa-wallet me-2"></i>របៀបបង់ប្រាក់</h6><div id="reportMethods"></div></div></div>
+                </div>
+            </div>
+
+            <!-- PANE 5: SETTINGS -->
+            <div id="adminSettingsPane" class="d-none">
+                <div class="row g-3">
+                    <div class="col-lg-6">
+                        <div class="glass-card p-4 h-100">
+                            <h5 class="text-gold fw-bold mb-3"><i class="fa-solid fa-coins me-2"></i>រូបិយប័ណ្ណ & KHQR</h5>
+                            <label class="form-label text-gold small fw-bold">អត្រាប្តូរប្រាក់ ($1 = ? រៀល)</label>
+                            <div class="input-group mb-3" style="max-width:260px;">
+                                <span class="input-group-text bg-dark text-gold border-secondary">$1 =</span>
+                                <input type="number" min="100" step="10" id="setRate" class="form-control bg-dark text-white border-secondary">
+                                <span class="input-group-text bg-dark text-gold border-secondary">៛</span>
+                            </div>
+                            <label class="form-label text-gold small fw-bold">រូប KHQR សម្រាប់ទទួលប្រាក់ (QR របស់ហាង)</label>
+                            <input type="file" id="setQrFile" accept="image/*" class="form-control bg-dark text-white border-secondary mb-2" onchange="handleQrFileSelect(event)">
+                            <div class="img-preview-box mb-2" style="height:200px;">
+                                <span class="text-secondary" id="setQrPlaceholder"><i class="fa-solid fa-qrcode me-1"></i> មិនទាន់មាន QR</span>
+                                <img id="setQrPreview" src="" alt="KHQR" class="d-none" style="object-fit:contain;background:#fff;">
+                            </div>
+                            <div class="d-flex gap-2 flex-wrap">
+                                <button class="btn btn-gold rounded-pill px-4 fw-bold" onclick="saveSettings()"><i class="fa-solid fa-floppy-disk me-1"></i> រក្សាទុក</button>
+                                <button class="btn btn-outline-danger rounded-pill px-3" onclick="removeQr()"><i class="fa-solid fa-trash me-1"></i> លុប QR</button>
+                            </div>
+                            <p class="text-secondary small mt-3 mb-0">QR នេះជារូបថេរ។ ប្រព័ន្ធមិនបានផ្ទៀងផ្ទាត់ថាភ្ញៀវបានបង់ដោយស្វ័យប្រវត្តិទេ អ្នកគិតលុយត្រូវពិនិត្យក្នុងកម្មវិធីធនាគារ រួចចុច "ទទួលប្រាក់"។</p>
+                        </div>
+                    </div>
+                    <div class="col-lg-6">
+                        <div class="glass-card p-4 h-100">
+                            <h5 class="text-gold fw-bold mb-3"><i class="fa-solid fa-shield-halved me-2"></i>បម្រុងទុកទិន្នន័យ (Backup)</h5>
+                            <button class="btn btn-gold rounded-pill px-4 fw-bold mb-3" onclick="backupNow()"><i class="fa-solid fa-download me-1"></i> ទាញយក Backup ឥឡូវនេះ</button>
+                            <div class="small text-secondary mb-2">Backup ស្វ័យប្រវត្តិ (រក្សាទុក ៧ ចុងក្រោយ):</div>
+                            <div id="backupList" class="mb-3"></div>
+                            <div class="alert alert-warning small mb-0 py-2">
+                                ⚠️ Backup ស្វ័យប្រវត្តិនៅលើ Server ដូចគ្នា។ បើ Server បាត់ទិន្នន័យ វាបាត់ជាមួយ ដូច្នេះសូមទាញយកទុកក្នុងកុំព្យូទ័រជាប្រចាំ។ ឯកសារនេះរក្សាតែទិន្នន័យ (ទំនិញ ការកម្ម៉ង់) មិនរួមរូបភាពដែលបាន upload ទេ។ បើប្រើ Render ត្រូវមាន <b>Persistent Disk</b> ទើបទិន្នន័យមិនបាត់ពេល redeploy។
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-12">
+                        <div class="glass-card p-4">
+                            <h5 class="text-gold fw-bold mb-1"><i class="fa-solid fa-users-gear me-2"></i>អ្នកប្រើប្រាស់ & តួនាទី</h5>
+                            <p class="text-secondary small">ម្ចាស់ហាង (Owner) ធ្វើបានគ្រប់យ៉ាង។ អ្នកគិតលុយ (Cashier) មើល និងគ្រប់គ្រងបានតែការកម្ម៉ង់ និងការទទួលប្រាក់។</p>
+                            <div class="table-responsive mb-3">
+                                <table class="table table-dark custom-table align-middle mb-0">
+                                    <thead><tr><th>ឈ្មោះគណនី</th><th>តួនាទី</th><th class="text-center">សកម្មភាព</th></tr></thead>
+                                    <tbody id="userList"></tbody>
+                                </table>
+                            </div>
+                            <div class="row g-2 align-items-end">
+                                <div class="col-md-3"><label class="form-label text-gold small fw-bold">ឈ្មោះគណនីថ្មី</label><input type="text" id="newUserName" class="form-control form-control-sm bg-dark text-white border-secondary" placeholder="cashier1" autocomplete="off"></div>
+                                <div class="col-md-3"><label class="form-label text-gold small fw-bold">ពាក្យសម្ងាត់ (≥ 6)</label><input type="password" id="newUserPass" class="form-control form-control-sm bg-dark text-white border-secondary" autocomplete="new-password"></div>
+                                <div class="col-md-3"><label class="form-label text-gold small fw-bold">តួនាទី</label>
+                                    <select id="newUserRole" class="form-select form-select-sm bg-dark text-white border-secondary"><option value="cashier">អ្នកគិតលុយ (Cashier)</option><option value="owner">ម្ចាស់ហាង (Owner)</option></select></div>
+                                <div class="col-md-3"><button class="btn btn-gold btn-sm rounded-pill px-4 fw-bold w-100" onclick="addUser()"><i class="fa-solid fa-user-plus me-1"></i> បន្ថែមអ្នកប្រើ</button></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <!-- PANE 3: BANNERS -->
@@ -950,6 +1069,85 @@
                             <button type="submit" class="btn btn-gold rounded-pill px-4 fw-bold"><i class="fa-solid fa-floppy-disk me-1"></i> រក្សាទុក</button>
                         </div>
                     </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: PAYMENT -->
+    <div class="modal fade" id="payModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content glass-card border-0 text-white" style="background: rgba(15, 18, 26, 0.98);">
+                <div class="modal-header border-bottom border-secondary border-opacity-25">
+                    <h5 class="modal-title fw-bold text-gold"><i class="fa-solid fa-hand-holding-dollar me-2"></i>ទទួលប្រាក់</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body py-3">
+                    <div class="text-secondary small mb-2" id="payOrderLabel"></div>
+                    <div class="text-center p-3 mb-3 rounded-3 bg-dark bg-opacity-50 border border-secondary border-opacity-25">
+                        <div class="text-secondary small">តម្លៃសរុប</div>
+                        <div class="fs-1 fw-bold text-gold" id="payTotalUsd">$0.00</div>
+                        <div class="fs-5 text-white" id="payTotalKhr">៛0</div>
+                    </div>
+                    <div class="btn-group w-100 mb-3" role="group">
+                        <input type="radio" class="btn-check" name="payMethod" id="payMethodCash" value="cash" checked onchange="setPayMethod()">
+                        <label class="btn btn-outline-gold" for="payMethodCash"><i class="fa-solid fa-money-bill-wave me-1"></i> សាច់ប្រាក់</label>
+                        <input type="radio" class="btn-check" name="payMethod" id="payMethodKhqr" value="khqr" onchange="setPayMethod()">
+                        <label class="btn btn-outline-gold" for="payMethodKhqr"><i class="fa-solid fa-qrcode me-1"></i> KHQR</label>
+                        <input type="radio" class="btn-check" name="payMethod" id="payMethodOther" value="other" onchange="setPayMethod()">
+                        <label class="btn btn-outline-gold" for="payMethodOther">ផ្សេងៗ</label>
+                    </div>
+
+                    <div id="paySectionCash">
+                        <div class="row g-2 mb-2">
+                            <div class="col-4">
+                                <label class="form-label text-gold small fw-bold mb-1">រូបិយប័ណ្ណ</label>
+                                <select id="payCurrency" class="form-select bg-dark text-white border-secondary" onchange="updatePayChange()">
+                                    <option value="USD">$ ដុល្លារ</option><option value="KHR">៛ រៀល</option>
+                                </select>
+                            </div>
+                            <div class="col-8">
+                                <label class="form-label text-gold small fw-bold mb-1">ប្រាក់ដែលភ្ញៀវឱ្យ</label>
+                                <input type="number" min="0" step="any" id="payReceived" class="form-control bg-dark text-white border-secondary fs-5" oninput="updatePayChange()" placeholder="0">
+                            </div>
+                        </div>
+                        <div class="d-flex flex-wrap gap-1 mb-3">
+                            <button type="button" class="btn btn-sm btn-outline-light" onclick="quickReceive(document.getElementById('payCurrency').value, 'exact')">ចំនួនពិត</button>
+                            <button type="button" class="btn btn-sm btn-outline-light" onclick="quickReceive('USD', 5)">$5</button>
+                            <button type="button" class="btn btn-sm btn-outline-light" onclick="quickReceive('USD', 10)">$10</button>
+                            <button type="button" class="btn btn-sm btn-outline-light" onclick="quickReceive('USD', 20)">$20</button>
+                            <button type="button" class="btn btn-sm btn-outline-light" onclick="quickReceive('KHR', 10000)">៛10,000</button>
+                            <button type="button" class="btn btn-sm btn-outline-light" onclick="quickReceive('KHR', 20000)">៛20,000</button>
+                            <button type="button" class="btn btn-sm btn-outline-light" onclick="quickReceive('KHR', 50000)">៛50,000</button>
+                        </div>
+                        <div id="payChange" class="mb-2" style="min-height:32px;"></div>
+                    </div>
+
+                    <div id="paySectionKhqr" class="text-center d-none">
+                        <img id="payQrImg" src="" alt="KHQR" class="rounded bg-white p-2 d-none" style="max-width:240px;width:100%;">
+                        <div id="payQrNone" class="text-secondary small">មិនទាន់មានរូប KHQR ទេ (ដាក់ក្នុង Admin → ការកំណត់)</div>
+                        <div class="small text-warning mt-2">សូមពិនិត្យថាប្រាក់ចូលក្នុងកម្មវិធីធនាគារ មុនចុចបញ្ជាក់។</div>
+                    </div>
+                </div>
+                <div class="modal-footer border-top border-secondary border-opacity-25">
+                    <button type="button" class="btn btn-secondary rounded-pill px-4" data-bs-dismiss="modal">បោះបង់</button>
+                    <button type="button" class="btn btn-gold rounded-pill px-4 fw-bold" id="btnConfirmPay" onclick="confirmPay()"><i class="fa-solid fa-check me-1"></i> បញ្ជាក់ការទទួលប្រាក់</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: CUSTOMER ORDER TRACKING -->
+    <div class="modal fade" id="trackModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
+            <div class="modal-content glass-card border-0 text-white" style="background: rgba(15, 18, 26, 0.98);">
+                <div class="modal-header border-bottom border-secondary border-opacity-25">
+                    <h5 class="modal-title fw-bold text-gold"><i class="fa-solid fa-receipt me-2"></i>ការកម្ម៉ង់របស់ខ្ញុំ</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body py-3">
+                    <div id="trackList"></div>
+                    <div class="text-secondary small text-center mt-2">ស្ថានភាពធ្វើបច្ចុប្បន្នភាពដោយស្វ័យប្រវត្តិ។ ការកម្ម៉ង់រក្សាទុកលើឧបករណ៍នេះ ២៤ ម៉ោង។</div>
                 </div>
             </div>
         </div>
@@ -1521,6 +1719,426 @@
             } catch (err) { alert(err.message); }
         }
 
+        // ----------------------------------------------------
+        // CURRENCY, ROLES, PAYMENT, REPORTS, SETTINGS, TRACKING
+        // ----------------------------------------------------
+        let settings = { exchangeRate: 4100, khqrImage: '' };
+        let adminRole = 'owner';
+        let adminSelf = null;
+
+        async function loadSettings() {
+            try { settings = await api('/api/settings'); renderCart(); } catch (_) { /* offline */ }
+        }
+        const khr = (usd) => Math.round((usd * settings.exchangeRate) / 100) * 100;
+        const fmtKhr = (n) => '៛' + Number(n).toLocaleString('en-US');
+        const money = (usd) => '$' + Number(usd).toFixed(2);
+        const ymd = (d) => d.toLocaleDateString('en-CA'); // YYYY-MM-DD in local time
+
+        // Cashiers only see the Orders tab
+        function applyRoleUi() {
+            const owner = adminRole === 'owner';
+            document.querySelectorAll('[data-owner]').forEach(el => el.classList.toggle('d-none', !owner));
+            if (!owner) switchAdminSub('orders');
+        }
+
+        // Download a file from an admin endpoint (needs the Authorization header)
+        async function downloadWithAuth(path, filename) {
+            try {
+                const res = await fetch(API_BASE + path, { headers: { Authorization: 'Bearer ' + adminToken } });
+                if (!res.ok) {
+                    let m = 'កំហុស ' + res.status;
+                    try { m = (await res.json()).error || m; } catch (_) {}
+                    throw new Error(m);
+                }
+                const blob = await res.blob();
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = filename;
+                document.body.appendChild(a); a.click(); a.remove();
+                setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+            } catch (err) { alert(err.message); }
+        }
+
+        // ---------- Payment ----------
+        function payBadgeHtml(o) {
+            if (o.payStatus === 'paid') return '<span class="badge bg-success"><i class="fa-solid fa-circle-check me-1"></i>បានបង់</span>';
+            if (o.payStatus === 'refunded') return '<span class="badge bg-danger">សងប្រាក់វិញ</span>';
+            if (o.status !== 'cancelled') return '<span class="badge bg-warning text-dark">មិនទាន់បង់</span>';
+            return '';
+        }
+
+        function receiptPayHtml(o) {
+            const rate = o.rate > 0 ? o.rate : settings.exchangeRate;
+            const r100 = (usd) => Math.round((usd * rate) / 100) * 100;
+            let h = `<div class="rc-row"><span></span><span>${fmtKhr(r100(o.total))}</span></div>`;
+            if (o.payStatus === 'paid') {
+                const labels = { cash: 'សាច់ប្រាក់', khqr: 'KHQR', other: 'ផ្សេងៗ' };
+                h += '<hr class="rc-sep">';
+                h += `<div class="rc-row"><span>បង់ដោយ</span><span>${labels[o.payMethod] || ''}</span></div>`;
+                if (o.payMethod === 'cash') {
+                    h += `<div class="rc-row"><span>ប្រាក់ទទួល</span><span>${o.receivedCur === 'KHR' ? fmtKhr(o.received) : money(o.received)}</span></div>`;
+                    const chg = o.receivedCur === 'KHR' ? fmtKhr(r100(o.changeUsd)) : money(o.changeUsd) + ' (' + fmtKhr(r100(o.changeUsd)) + ')';
+                    h += `<div class="rc-row"><span>ប្រាក់អាប់</span><span>${chg}</span></div>`;
+                }
+                h += `<div class="rc-row"><span>អត្រា</span><span>$1 = ${fmtKhr(rate)}</span></div>`;
+            } else if (o.status !== 'cancelled') {
+                h += '<div class="rc-row"><span>ស្ថានភាព</span><span>មិនទាន់បង់ប្រាក់</span></div>';
+            }
+            return h;
+        }
+
+        let payModalInstance = null;
+        let payOrder = null;
+        function openPayModal(orderId) {
+            const o = orders.find(x => x.id === orderId);
+            if (!o) return;
+            payOrder = o;
+            if (!payModalInstance) payModalInstance = new bootstrap.Modal(document.getElementById('payModal'));
+            document.getElementById('payOrderLabel').textContent = `${o.id} · ${o.customerName} · ${o.tableNo}`;
+            document.getElementById('payTotalUsd').textContent = money(o.total);
+            document.getElementById('payTotalKhr').textContent = fmtKhr(khr(o.total));
+            document.getElementById('payMethodCash').checked = true;
+            document.getElementById('payCurrency').value = 'USD';
+            document.getElementById('payReceived').value = '';
+            const q = document.getElementById('payQrImg');
+            const none = document.getElementById('payQrNone');
+            if (settings.khqrImage) { q.src = imgUrl(settings.khqrImage); q.classList.remove('d-none'); none.classList.add('d-none'); }
+            else { q.classList.add('d-none'); none.classList.remove('d-none'); }
+            setPayMethod();
+            payModalInstance.show();
+        }
+        function getPayMethod() { return document.querySelector('input[name="payMethod"]:checked').value; }
+        function setPayMethod() {
+            const m = getPayMethod();
+            document.getElementById('paySectionCash').classList.toggle('d-none', m !== 'cash');
+            document.getElementById('paySectionKhqr').classList.toggle('d-none', m !== 'khqr');
+            updatePayChange();
+        }
+        function calcPay() {
+            const o = payOrder;
+            const cur = document.getElementById('payCurrency').value;
+            const received = parseFloat(document.getElementById('payReceived').value);
+            if (!o || !(received > 0)) return { empty: true, cur };
+            if (cur === 'USD') {
+                const diff = Math.round((received - o.total) * 100) / 100;
+                if (diff >= -0.005) { const c = Math.max(0, diff); return { ok: true, cur, changeUsd: c, changeKhr: khr(c) }; }
+                return { cur, short: money(-diff) + ' (' + fmtKhr(khr(-diff)) + ')' };
+            }
+            const diff = received - khr(o.total);
+            if (diff >= 0) return { ok: true, cur, changeUsd: diff / settings.exchangeRate, changeKhr: diff };
+            return { cur, short: fmtKhr(-diff) };
+        }
+        function updatePayChange() {
+            const out = document.getElementById('payChange');
+            const btn = document.getElementById('btnConfirmPay');
+            if (getPayMethod() !== 'cash') { out.innerHTML = ''; btn.disabled = false; return; }
+            const c = calcPay();
+            if (c.ok) {
+                const txt = c.cur === 'USD' ? `${money(c.changeUsd)} <span class="text-secondary fs-6">(${fmtKhr(c.changeKhr)})</span>` : fmtKhr(c.changeKhr);
+                out.innerHTML = `<div class="text-success fw-bold fs-4">ប្រាក់អាប់: ${txt}</div>`;
+                btn.disabled = false;
+            } else if (c.short) {
+                out.innerHTML = `<div class="text-danger fw-bold">ប្រាក់មិនគ្រប់ ខ្វះ ${c.short}</div>`;
+                btn.disabled = true;
+            } else { out.innerHTML = ''; btn.disabled = true; }
+        }
+        function quickReceive(cur, amount) {
+            if (!payOrder) return;
+            document.getElementById('payCurrency').value = cur;
+            document.getElementById('payReceived').value = amount === 'exact' ? (cur === 'USD' ? payOrder.total.toFixed(2) : khr(payOrder.total)) : amount;
+            updatePayChange();
+        }
+        async function confirmPay() {
+            if (!payOrder) return;
+            const body = {
+                method: getPayMethod(),
+                currency: document.getElementById('payCurrency').value,
+                received: parseFloat(document.getElementById('payReceived').value)
+            };
+            try {
+                const updated = mapOrder(await api(`/api/admin/orders/${encodeURIComponent(payOrder.id)}/pay`, { method: 'POST', auth: true, body }));
+                const i = orders.findIndex(x => x.id === updated.id);
+                if (i > -1) orders[i] = updated;
+                renderDashboard();
+                showToast('✔ បានទទួលប្រាក់ ' + updated.id);
+                document.getElementById('payModal').addEventListener('hidden.bs.modal', () => openReceiptModal(updated.id), { once: true });
+                payModalInstance.hide();
+            } catch (err) { alert(err.message); }
+        }
+
+        // ---------- Reports ----------
+        function setReportRange(r) {
+            const to = new Date();
+            let from = new Date();
+            if (r === '7d') from.setDate(to.getDate() - 6);
+            else if (r === '30d') from.setDate(to.getDate() - 29);
+            else if (r === 'month') from = new Date(to.getFullYear(), to.getMonth(), 1);
+            document.getElementById('reportFrom').value = ymd(from);
+            document.getElementById('reportTo').value = ymd(to);
+            document.querySelectorAll('#reportRangeBtns [data-range]').forEach(b => {
+                b.className = 'btn btn-sm rounded-pill ' + (b.dataset.range === r ? 'btn-gold' : 'btn-outline-gold');
+            });
+            loadReports();
+        }
+        async function loadReports() {
+            const from = document.getElementById('reportFrom').value;
+            const to = document.getElementById('reportTo').value;
+            if (!from || !to) return;
+            try {
+                const d = await api(`/api/admin/reports?from=${from}&to=${to}`, { auth: true });
+                renderReports(d);
+            } catch (err) { alert(err.message); }
+        }
+        function exportReport() {
+            const from = document.getElementById('reportFrom').value;
+            const to = document.getElementById('reportTo').value;
+            if (from && to) downloadWithAuth(`/api/admin/reports/export?from=${from}&to=${to}`, `sales-${from}_${to}.csv`);
+        }
+        function barChart(items, getVal, getLabel, getTitle, getTop) {
+            if (!items.length) return '<div class="rpt-empty">គ្មានទិន្នន័យ</div>';
+            const max = Math.max(...items.map(getVal), 0.0001);
+            return '<div class="rpt-chart">' + items.map(i => `
+                <div class="rpt-col" title="${esc(getTitle(i))}">
+                    <div class="rpt-val">${esc(getTop(i))}</div>
+                    <div class="rpt-bar" style="height:${Math.max(2, (getVal(i) / max) * 78)}%"></div>
+                    <div class="rpt-lbl">${esc(getLabel(i))}</div>
+                </div>`).join('') + '</div>';
+        }
+        function renderReports(d) {
+            const s = d.summary;
+            const card = (label, val, sub, cls, icon) => `
+                <div class="col-6 col-lg flex-fill"><div class="glass-card p-3 h-100 d-flex align-items-center justify-content-between">
+                    <div><span class="${cls} small fw-bold">${label}</span><h4 class="fw-bold ${cls} mb-0 mt-1">${val}</h4><small class="text-secondary">${sub}</small></div>
+                    <div class="rounded-circle bg-white bg-opacity-10 p-3 ${cls} fs-5"><i class="fa-solid ${icon}"></i></div>
+                </div></div>`;
+            document.getElementById('reportSummary').innerHTML =
+                card('ការកម្ម៉ង់', s.orders, `លុបចោល ${s.cancelled}`, 'text-white', 'fa-receipt') +
+                card('ចំណូលសរុប', money(s.revenue), fmtKhr(Math.round(s.revenue * d.rate / 100) * 100), 'text-gold', 'fa-sack-dollar') +
+                card('បានទទួលប្រាក់', money(s.paid), 'បង់រួច', 'text-success', 'fa-circle-check') +
+                card('មិនទាន់បង់', money(s.unpaid), 'ត្រូវទារ', 'text-warning', 'fa-hourglass-half') +
+                card('មធ្យមក្នុង ១ ការកម្ម៉ង់', money(s.avgOrder), '', 'text-info', 'fa-calculator');
+
+            const few = d.daily.length <= 14;
+            document.getElementById('reportDaily').innerHTML = barChart(d.daily, x => x.revenue, x => x.d.slice(5),
+                x => `${x.d}: ${money(x.revenue)} (${x.orders} ការកម្ម៉ង់)`, x => few ? Math.round(x.revenue * 10) / 10 : '');
+            const byHour = Array.from({ length: 24 }, (_, h) => d.hourly.find(x => x.h === h) || { h, orders: 0, revenue: 0 });
+            document.getElementById('reportHourly').innerHTML = d.hourly.length
+                ? barChart(byHour, x => x.orders, x => x.h, x => `${x.h}:00 - ${x.orders} ការកម្ម៉ង់ (${money(x.revenue)})`, x => x.orders || '')
+                : '<div class="rpt-empty">គ្មានទិន្នន័យ</div>';
+
+            document.getElementById('reportTop').innerHTML = d.top.length ? `
+                <div class="table-responsive"><table class="table table-dark custom-table align-middle mb-0">
+                    <thead><tr><th>#</th><th>ទំនិញ</th><th class="text-end">ចំនួន</th><th class="text-end">ចំណូល</th></tr></thead>
+                    <tbody>${d.top.map((t, i) => `<tr><td>${i + 1}</td><td>${esc(t.name)}</td><td class="text-end fw-bold text-gold">${t.qty}</td><td class="text-end">${money(t.revenue)}</td></tr>`).join('')}</tbody>
+                </table></div>` : '<div class="rpt-empty">គ្មានទិន្នន័យ</div>';
+
+            const labels = { cash: 'សាច់ប្រាក់', khqr: 'KHQR', other: 'ផ្សេងៗ' };
+            document.getElementById('reportMethods').innerHTML = d.methods.length
+                ? d.methods.map(m => `<div class="d-flex justify-content-between align-items-center border-bottom border-secondary border-opacity-25 py-2"><span>${labels[m.method] || esc(m.method)} <small class="text-secondary">(${m.orders})</small></span><b class="text-gold">${money(m.total)}</b></div>`).join('')
+                : '<div class="rpt-empty">មិនទាន់មានការបង់ប្រាក់</div>';
+        }
+
+        // ---------- Settings: rate, KHQR, backup, users ----------
+        let adminQr = '';
+        function showQrPreview(src) {
+            const img = document.getElementById('setQrPreview');
+            const ph = document.getElementById('setQrPlaceholder');
+            if (src) { img.src = src.startsWith('data:') ? src : imgUrl(src); img.classList.remove('d-none'); ph.classList.add('d-none'); }
+            else { img.removeAttribute('src'); img.classList.add('d-none'); ph.classList.remove('d-none'); }
+        }
+        function handleQrFileSelect(e) {
+            const f = e.target.files[0];
+            if (!f) return;
+            if (f.size > 5 * 1024 * 1024) { alert('ទំហំរូបភាពធំពេក (អតិបរមា 5MB)'); e.target.value = ''; return; }
+            const r = new FileReader();
+            r.onload = ev => showQrPreview(ev.target.result);
+            r.readAsDataURL(f);
+        }
+        function removeQr() {
+            adminQr = '';
+            document.getElementById('setQrFile').value = '';
+            showQrPreview('');
+        }
+        async function loadAdminSettings() {
+            if (!isAdminLoggedIn) return;
+            try {
+                const [s, backups, users] = await Promise.all([
+                    api('/api/admin/settings', { auth: true }),
+                    api('/api/admin/backups', { auth: true }),
+                    api('/api/admin/users', { auth: true })
+                ]);
+                document.getElementById('setRate').value = s.exchangeRate;
+                adminQr = s.khqrImage || '';
+                document.getElementById('setQrFile').value = '';
+                showQrPreview(adminQr);
+                renderBackups(backups);
+                renderUsers(users);
+            } catch (err) { alert(err.message); }
+        }
+        async function saveSettings() {
+            try {
+                let qr = adminQr;
+                const f = document.getElementById('setQrFile').files[0];
+                if (f) {
+                    const fd = new FormData();
+                    fd.append('image', f);
+                    qr = (await api('/api/admin/upload', { method: 'POST', auth: true, form: fd })).url;
+                }
+                const rate = parseFloat(document.getElementById('setRate').value);
+                const s = await api('/api/admin/settings', { method: 'PUT', auth: true, body: { exchangeRate: rate, khqrImage: qr } });
+                settings = s;
+                adminQr = s.khqrImage || '';
+                document.getElementById('setQrFile').value = '';
+                showQrPreview(adminQr);
+                renderCart();
+                showToast('បានរក្សាទុកការកំណត់!');
+            } catch (err) { alert(err.message); }
+        }
+        function backupNow() { downloadWithAuth('/api/admin/backup', 'mlob-backup-' + ymd(new Date()) + '.db'); }
+        function renderBackups(list) {
+            const box = document.getElementById('backupList');
+            if (!list.length) { box.innerHTML = '<div class="text-secondary small">មិនទាន់មាន Backup ស្វ័យប្រវត្តិ (បង្កើតរៀងរាល់ ២០ ម៉ោង)</div>'; return; }
+            box.innerHTML = list.map(b => `
+                <div class="d-flex justify-content-between align-items-center border-bottom border-secondary border-opacity-25 py-1">
+                    <span class="small">${new Date(b.createdAt).toLocaleString('en-GB')} <span class="text-secondary">· ${(b.size / 1024).toFixed(0)} KB</span></span>
+                    <button class="btn btn-sm btn-outline-light py-0" onclick="downloadWithAuth('/api/admin/backups/${b.name}', '${b.name}')"><i class="fa-solid fa-download"></i></button>
+                </div>`).join('');
+        }
+        function renderUsers(list) {
+            document.getElementById('userList').innerHTML = list.map(u => {
+                const me = adminSelf && adminSelf.id === u.id;
+                return `<tr>
+                    <td class="fw-bold">${esc(u.username)} ${me ? '<span class="badge bg-gold text-dark">អ្នក</span>' : ''}</td>
+                    <td><select class="form-select form-select-sm bg-dark text-white border-secondary" style="width:auto;" onchange="changeUserRole(${u.id}, this.value)">
+                        <option value="owner" ${u.role === 'owner' ? 'selected' : ''}>ម្ចាស់ហាង (Owner)</option>
+                        <option value="cashier" ${u.role === 'cashier' ? 'selected' : ''}>អ្នកគិតលុយ (Cashier)</option></select></td>
+                    <td class="text-center"><div class="btn-group btn-group-sm">
+                        <button class="btn btn-outline-gold" onclick="resetUserPassword(${u.id})" title="ប្តូរពាក្យសម្ងាត់"><i class="fa-solid fa-key"></i></button>
+                        <button class="btn btn-outline-danger" ${me ? 'disabled' : ''} onclick="deleteUser(${u.id})" title="លុប"><i class="fa-solid fa-trash"></i></button>
+                    </div></td></tr>`;
+            }).join('');
+        }
+        async function addUser() {
+            try {
+                await api('/api/admin/users', { method: 'POST', auth: true, body: {
+                    username: document.getElementById('newUserName').value.trim(),
+                    password: document.getElementById('newUserPass').value,
+                    role: document.getElementById('newUserRole').value
+                }});
+                document.getElementById('newUserName').value = '';
+                document.getElementById('newUserPass').value = '';
+                showToast('បានបន្ថែមអ្នកប្រើថ្មី!');
+                loadAdminSettings();
+            } catch (err) { alert(err.message); }
+        }
+        async function changeUserRole(id, role) {
+            try { await api('/api/admin/users/' + id, { method: 'PATCH', auth: true, body: { role } }); showToast('បានប្តូរតួនាទី!'); }
+            catch (err) { alert(err.message); }
+            loadAdminSettings();
+        }
+        async function resetUserPassword(id) {
+            const pw = prompt('ពាក្យសម្ងាត់ថ្មី (យ៉ាងតិច ៦ តួ):');
+            if (!pw) return;
+            try { await api('/api/admin/users/' + id, { method: 'PATCH', auth: true, body: { password: pw } }); showToast('បានប្តូរពាក្យសម្ងាត់!'); }
+            catch (err) { alert(err.message); }
+        }
+        async function deleteUser(id) {
+            if (!confirm('តើអ្នកពិតជាចង់លុបអ្នកប្រើនេះមែនទេ?')) return;
+            try { await api('/api/admin/users/' + id, { method: 'DELETE', auth: true }); showToast('បានលុបអ្នកប្រើ!'); }
+            catch (err) { alert(err.message); }
+            loadAdminSettings();
+        }
+
+        // ---------- Customer: track my orders ----------
+        let myOrders = [];
+        try { myOrders = JSON.parse(localStorage.getItem('udom_my_orders') || '[]'); } catch (_) {}
+        let trackData = {};
+        let trackSig = '';
+        let trackModalInstance = null;
+        const saveMyOrders = () => { try { localStorage.setItem('udom_my_orders', JSON.stringify(myOrders)); } catch (_) {} };
+        function addMyOrder(o) {
+            if (!o.trackCode) return;
+            myOrders.unshift({ code: o.trackCode, id: o.id, t: Date.now() });
+            myOrders = myOrders.slice(0, 10);
+            saveMyOrders();
+        }
+        const isTrackFinal = (d) => d && d.status === 'cancelled';
+        async function refreshTracking() {
+            const now = Date.now();
+            myOrders = myOrders.filter(m => now - m.t < 24 * 3600e3);
+            const open = document.getElementById('trackModal').classList.contains('show');
+            for (const m of [...myOrders]) {
+                const known = trackData[m.code];
+                // finished orders are only re-checked while the window is open (to see payment)
+                if (known && (isTrackFinal(known) || (known.status === 'completed' && !open))) continue;
+                try {
+                    const d = await api('/api/orders/track/' + encodeURIComponent(m.code));
+                    if (known && known.status !== d.status) {
+                        if (d.status === 'completed') { playReadySound(); showToast(`☕ ការកម្ម៉ង់ ${d.id} រួចរាល់ហើយ! សូមមកទទួល`); }
+                        else if (d.status === 'preparing') showToast(`កំពុងរៀបចំការកម្ម៉ង់ ${d.id}`);
+                        else if (d.status === 'cancelled') showToast(`ការកម្ម៉ង់ ${d.id} ត្រូវបានលុបចោល`);
+                    }
+                    trackData[m.code] = d;
+                } catch (err) {
+                    if (err.status === 404) { myOrders = myOrders.filter(x => x.code !== m.code); delete trackData[m.code]; }
+                }
+            }
+            saveMyOrders();
+            updateTrackBadge();
+            renderTrackList();
+        }
+        function updateTrackBadge() {
+            const active = myOrders.filter(m => { const d = trackData[m.code]; return !d || d.status === 'pending' || d.status === 'preparing'; }).length;
+            const b = document.getElementById('trackBadge');
+            b.textContent = active;
+            b.classList.toggle('d-none', active === 0);
+            b.classList.toggle('pulse', active > 0);
+        }
+        function renderTrackList() {
+            const sig = JSON.stringify([myOrders.map(m => m.code), trackData, settings.khqrImage, settings.exchangeRate]);
+            if (sig === trackSig) return;
+            trackSig = sig;
+            const box = document.getElementById('trackList');
+            if (!myOrders.length) { box.innerHTML = '<div class="text-center text-secondary py-4"><i class="fa-solid fa-mug-hot fs-1 mb-2 opacity-50 d-block"></i>មិនទាន់មានការកម្ម៉ង់ទេ</div>'; return; }
+            box.innerHTML = myOrders.map(m => {
+                const d = trackData[m.code];
+                if (!d) return `<div class="glass-card p-3 mb-2 text-secondary">${esc(m.id)} · កំពុងផ្ទុក...</div>`;
+                const idx = { pending: 0, preparing: 1, completed: 2 }[d.status];
+                const steps = d.status === 'cancelled'
+                    ? '<div class="text-danger fw-bold my-2"><i class="fa-solid fa-circle-xmark me-1"></i>ការកម្ម៉ង់ត្រូវបានលុបចោល</div>'
+                    : ['រង់ចាំ', 'កំពុងរៀបចំ', 'រួចរាល់'].map((t, i) => `<div class="trk-step ${i <= idx ? 'on' : ''} ${i === idx ? 'cur' : ''}"><span class="trk-dot"></span><small>${t}</small></div>`).join('<div class="trk-line"></div>');
+                let msg = '';
+                if (d.status === 'pending' || d.status === 'preparing') msg = d.queueAhead > 0 ? `មានការកម្ម៉ង់មុនអ្នក ${d.queueAhead}` : 'ជិតដល់វេនអ្នកហើយ ☕';
+                else if (d.status === 'completed') msg = '<span class="text-success fw-bold">☕ រួចរាល់ហើយ! សូមមកទទួល</span>';
+                const unpaid = d.payStatus === 'unpaid' && d.status !== 'cancelled';
+                const pay = d.payStatus === 'paid' ? '<span class="badge bg-success">បានបង់ប្រាក់</span>'
+                    : unpaid ? '<span class="badge bg-warning text-dark">សូមបង់ប្រាក់ទៅបុគ្គលិក</span>' : '';
+                const qr = (unpaid && settings.khqrImage)
+                    ? `<details class="mt-2"><summary class="small text-gold" style="cursor:pointer;">បង់តាម KHQR</summary><img src="${esc(imgUrl(settings.khqrImage))}" alt="KHQR" class="d-block mx-auto mt-2 rounded bg-white p-2" style="max-width:220px;width:100%;"></details>` : '';
+                return `<div class="glass-card p-3 mb-3">
+                    <div class="d-flex justify-content-between align-items-center"><b class="text-gold">${esc(d.id)}</b>${pay}</div>
+                    <div class="trk-steps">${steps}</div>
+                    <div class="small mb-1">${msg}</div>
+                    <div class="small text-secondary">${d.items.map(i => esc(i.name) + ' ×' + i.quantity).join(', ')}</div>
+                    <div class="d-flex justify-content-between mt-2"><span class="text-secondary small">សរុប</span><b class="text-gold">${money(d.total)} <small class="text-secondary">(${fmtKhr(khr(d.total))})</small></b></div>
+                    ${qr}
+                </div>`;
+            }).join('');
+        }
+        function openTrackModal() {
+            if (!trackModalInstance) trackModalInstance = new bootstrap.Modal(document.getElementById('trackModal'));
+            trackSig = '';
+            renderTrackList();
+            trackModalInstance.show();
+            refreshTracking();
+        }
+        document.addEventListener('DOMContentLoaded', () => { refreshTracking(); });
+        setInterval(() => {
+            if (document.hidden || !myOrders.length) return;
+            if (myOrders.some(m => { const d = trackData[m.code]; return !d || d.status === 'pending' || d.status === 'preparing'; })
+                || document.getElementById('trackModal').classList.contains('show')) refreshTracking();
+        }, 5000);
+
         // Entrance animation only for items we haven't shown yet (polling re-renders won't replay it)
         const seenProducts = new Set();
         const seenOrderCards = new Set();
@@ -1580,7 +2198,7 @@
             // Restore admin session (verify token with backend)
             setAdminLoggedInState(false);
             if (adminToken) {
-                try { await api('/api/auth/me', { auth: true }); setAdminLoggedInState(true); }
+                try { const me = await api('/api/auth/me', { auth: true }); adminSelf = me.admin; adminRole = me.admin.role || 'owner'; setAdminLoggedInState(true); }
                 catch (_) { clearAdminSession(); setAdminLoggedInState(false); }
             }
 
@@ -1589,7 +2207,7 @@
             setInterval(updateClock, 1000);
 
             // Load data from Backend (orders only load when admin is logged in)
-            await Promise.all([loadProductsFromDb(), refreshOrders(), loadBanners()]);
+            await Promise.all([loadProductsFromDb(), refreshOrders(), loadBanners(), loadSettings()]);
             renderPosProducts();
             renderCart();
             renderDashboard();
@@ -1606,7 +2224,7 @@
                 await loadProductsFromDb();
                 renderPosProducts();
                 renderAdminTable();
-                loadBanners();
+                loadBanners(); loadSettings();
             }, 30000);
         });
 
@@ -1644,15 +2262,19 @@
 
         // Admin sub-tabs: Products / Orders
         function switchAdminSub(sub) {
-            const panes = { products: 'adminProductsPane', orders: 'adminOrdersPane', banners: 'adminBannersPane' };
-            const btns = { products: 'adminSubProducts', orders: 'adminSubOrders', banners: 'adminSubBanners' };
+            const panes = { products: 'adminProductsPane', orders: 'adminOrdersPane', banners: 'adminBannersPane', reports: 'adminReportsPane', settings: 'adminSettingsPane' };
+            const btns = { products: 'adminSubProducts', orders: 'adminSubOrders', banners: 'adminSubBanners', reports: 'adminSubReports', settings: 'adminSubSettings' };
             for (const k in panes) {
                 document.getElementById(panes[k]).classList.toggle('d-none', k !== sub);
-                document.getElementById(btns[k]).className = 'btn rounded-pill px-4 fw-bold ' +
-                    (k === 'orders' ? 'position-relative ' : '') + (k === sub ? 'btn-gold' : 'btn-outline-gold');
+                const b = document.getElementById(btns[k]);
+                b.className = 'btn rounded-pill px-4 fw-bold ' + (k === 'orders' ? 'position-relative ' : '') + (k === sub ? 'btn-gold' : 'btn-outline-gold');
+                if (k !== 'orders') b.setAttribute('data-owner', '');
+                b.classList.toggle('d-none', adminRole !== 'owner' && k !== 'orders');
             }
             if (sub === 'orders') refreshOrders().then(renderDashboard);
             if (sub === 'banners') loadAdminBanners();
+            if (sub === 'reports') { if (!document.getElementById('reportFrom').value) setReportRange('7d'); else loadReports(); }
+            if (sub === 'settings') loadAdminSettings();
         }
 
         // ----------------------------------------------------
@@ -1660,7 +2282,7 @@
         // ----------------------------------------------------
         async function loadProductsFromDb() {
             try {
-                products = isAdminLoggedIn
+                products = (isAdminLoggedIn && adminRole === 'owner')
                     ? await api('/api/admin/products', { auth: true })
                     : await api('/api/products');
             } catch (err) {
@@ -1722,6 +2344,8 @@
             try {
                 const res = await api('/api/auth/login', { method: 'POST', body: { username, password } });
                 adminToken = res.token;
+                adminSelf = res.admin;
+                adminRole = res.admin.role || 'owner';
                 sessionStorage.setItem('udom_admin_token', adminToken);
                 document.getElementById('loginPassword').value = '';
                 setAdminLoggedInState(true);
@@ -1776,7 +2400,7 @@
             if (loggedIn) {
                 navContainer.innerHTML = `
                     <div class="d-flex align-items-center gap-2">
-                        <span class="badge bg-gold text-dark"><i class="fa-solid fa-user-check me-1"></i> Admin</span>
+                        <span class="badge bg-gold text-dark"><i class="fa-solid fa-user-check me-1"></i> ${adminRole === 'owner' ? 'Admin' : 'Cashier'}</span>
                         <button class="btn btn-sm btn-outline-danger rounded-pill px-2" onclick="handleAdminLogout()" title="Logout">
                             <i class="fa-solid fa-power-off"></i>
                         </button>
@@ -1786,6 +2410,7 @@
                 if (lockBadge) lockBadge.innerHTML = '<i class="fa-solid fa-check"></i>';
                 if (guardNotice) guardNotice.classList.add('d-none');
                 if (mainContent) mainContent.classList.remove('d-none');
+                applyRoleUi();
             } else {
                 orders = []; // clear order data when logged out / token expired
                 knownStatus = null;
@@ -2228,7 +2853,7 @@
                 badge.classList.remove('bump'); void badge.offsetWidth; badge.classList.add('bump');
                 lastCartCount = totalCount;
             }
-            totalEl.textContent = '$' + totalPrice.toFixed(2);
+            totalEl.innerHTML = '$' + totalPrice.toFixed(2) + `<small class="d-block text-secondary fs-6 fw-normal text-end">≈ ${fmtKhr(khr(totalPrice))}</small>`;
         }
 
         function changeCartQty(index, delta) {
@@ -2268,6 +2893,7 @@
                     items: cart.map(i => ({ id: i.id, name: i.name, quantity: i.quantity, sugar: i.sugar, note: i.note || '' }))
                 }});
                 newOrder = mapOrder(res);
+                addMyOrder(newOrder);
             } catch (err) {
                 alert(err.message);
                 await loadProductsFromDb();   // stock may have changed
@@ -2291,6 +2917,7 @@
             renderPosProducts();
             renderAdminTable();
             showToast(`ការកម្ម៉ង់ ${newOrder.id} ត្រូវបានផ្ញើរួចរាល់! សូមរង់ចាំបន្តិច 🙏`);
+            if (!isAdminLoggedIn) setTimeout(openTrackModal, 450); else refreshTracking();
         }
 
         // ----------------------------------------------------
@@ -2374,6 +3001,7 @@
 
                                 <div class="mb-3">
                                     <h5 class="fw-bold text-white mb-0"><i class="fa-solid fa-user text-gold me-2"></i>${esc(o.customerName)}</h5>
+                                    <div class="mt-1">${payBadgeHtml(o)}</div>
                                     <small class="text-secondary"><i class="fa-regular fa-clock me-1"></i>${o.timestamp}</small>
                                 </div>
 
@@ -2385,7 +3013,7 @@
                             <div>
                                 <div class="d-flex justify-content-between align-items-center pt-2 border-top border-secondary border-opacity-25 mb-3">
                                     <span class="text-secondary small">តម្លៃសរុប:</span>
-                                    <span class="fs-4 fw-bold text-gold">$${o.total.toFixed(2)}</span>
+                                    <span class="text-end"><span class="fs-4 fw-bold text-gold">$${o.total.toFixed(2)}</span><small class="d-block text-secondary">${fmtKhr(khr(o.total))}</small></span>
                                 </div>
 
                                 <div class="d-flex gap-1">
@@ -2421,7 +3049,7 @@
                         <td>${itemsList}</td>
                         <td class="fw-bold text-gold">$${o.total.toFixed(2)}</td>
                         <td class="small text-secondary">${o.timestamp}</td>
-                        <td>${getStatusBadgeHtml(o.status)}</td>
+                        <td>${getStatusBadgeHtml(o.status)}<div class="mt-1">${payBadgeHtml(o)}</div></td>
                         <td>
                             <div class="d-flex justify-content-center gap-1">
                                 ${getActionButtonsHtml(o)}
@@ -2444,8 +3072,11 @@
         }
 
         function getActionButtonsHtml(order) {
+            const payBtn = (order.payStatus === 'unpaid' && order.status !== 'cancelled')
+                ? `<button class="btn btn-sm btn-warning fw-bold" onclick="openPayModal('${order.id}')" title="ទទួលប្រាក់"><i class="fa-solid fa-hand-holding-dollar"></i></button>`
+                : '';
             if (order.status === 'pending') {
-                return `
+                return payBtn + `
                     <button class="btn btn-sm btn-info w-100 fw-bold" onclick="changeOrderStatus('${order.id}', 'preparing')">
                         <i class="fa-solid fa-spinner me-1"></i>ចាប់ផ្តើមរៀបចំ
                     </button>
@@ -2454,13 +3085,13 @@
                     </button>
                 `;
             } else if (order.status === 'preparing') {
-                return `
+                return payBtn + `
                     <button class="btn btn-sm btn-success w-100 fw-bold" onclick="changeOrderStatus('${order.id}', 'completed')">
                         <i class="fa-solid fa-check me-1"></i>រៀបចំរួចរាល់
                     </button>
                 `;
             } else {
-                return `<button class="btn btn-sm btn-outline-secondary w-100 disabled">បានបញ្ចប់</button>`;
+                return payBtn + `<button class="btn btn-sm btn-outline-secondary w-100 disabled">បានបញ្ចប់</button>`;
             }
         }
 
@@ -2550,6 +3181,7 @@
                 <hr class="rc-sep">
                 <div class="rc-row"><span>ចំនួនសរុប</span><span>${qtyTotal}</span></div>
                 <div class="rc-row rc-total"><span>សរុប (TOTAL)</span><span>$${o.total.toFixed(2)}</span></div>
+                ${receiptPayHtml(o)}
             `;
 
             receiptModalInstance.show();
