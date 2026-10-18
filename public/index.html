@@ -550,6 +550,9 @@
                 <button id="adminSubSettings" data-owner class="btn btn-outline-gold rounded-pill px-4 fw-bold" onclick="switchAdminSub('settings')">
                     <i class="fa-solid fa-gear me-1"></i> ការកំណត់
                 </button>
+                <button id="adminSubAudit" data-owner class="btn btn-outline-gold rounded-pill px-4 fw-bold" onclick="switchAdminSub('audit')">
+                    <i class="fa-solid fa-clipboard-list me-1"></i> កំណត់ត្រា
+                </button>
             </div>
 
             <!-- PANE 1: PRODUCTS -->
@@ -742,6 +745,7 @@
                         <div class="glass-card p-4 h-100">
                             <h5 class="text-gold fw-bold mb-3"><i class="fa-solid fa-shield-halved me-2"></i>បម្រុងទុកទិន្នន័យ (Backup)</h5>
                             <button class="btn btn-gold rounded-pill px-4 fw-bold mb-3" onclick="backupNow()"><i class="fa-solid fa-download me-1"></i> ទាញយក Backup ឥឡូវនេះ</button>
+                            <button class="btn btn-outline-gold rounded-pill px-3 mb-3 ms-1" onclick="testTelegram()"><i class="fa-brands fa-telegram me-1"></i> សាកល្បង Telegram</button>
                             <div class="small text-secondary mb-2">Backup ស្វ័យប្រវត្តិ (រក្សាទុក ៧ ចុងក្រោយ):</div>
                             <div id="backupList" class="mb-3"></div>
                             <div class="alert alert-warning small mb-0 py-2">
@@ -767,6 +771,25 @@
                                 <div class="col-md-3"><button class="btn btn-gold btn-sm rounded-pill px-4 fw-bold w-100" onclick="addUser()"><i class="fa-solid fa-user-plus me-1"></i> បន្ថែមអ្នកប្រើ</button></div>
                             </div>
                         </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- PANE: AUDIT LOG (owner only) -->
+            <div id="adminAuditPane" class="d-none">
+                <div class="glass-card p-4">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <div>
+                            <h5 class="text-gold fw-bold mb-1"><i class="fa-solid fa-clipboard-list me-2"></i>កំណត់ត្រាសកម្មភាព (Audit Log)</h5>
+                            <div class="text-secondary small">អ្នកណា ធ្វើអ្វី នៅពេលណា (៣០០ ចុងក្រោយ)។ ពណ៌ក្រហម = សកម្មភាពប្រថុយប្រថាន។</div>
+                        </div>
+                        <button class="btn btn-outline-gold btn-sm rounded-pill px-3" onclick="loadAudit()"><i class="fa-solid fa-rotate me-1"></i> ផ្ទុកឡើងវិញ</button>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table table-dark custom-table align-middle mb-0">
+                            <thead><tr><th>ពេលវេលា</th><th>អ្នកប្រើ</th><th>សកម្មភាព</th><th>គោលដៅ</th><th>ព័ត៌មាន</th></tr></thead>
+                            <tbody id="auditBody"></tbody>
+                        </table>
                     </div>
                 </div>
             </div>
@@ -2049,6 +2072,28 @@
             loadAdminSettings();
         }
 
+        // ---------- Audit log & Telegram test ----------
+        const AUDIT_LABELS = { login: 'ចូលប្រព័ន្ធ', login_failed: 'ចូលបរាជ័យ', password_change: 'ប្តូរពាក្យសម្ងាត់', order_status: 'ស្ថានភាពការកម្ម៉ង់',
+            order_pay: 'ទទួលប្រាក់', order_auto_cancel: 'លុបស្វ័យប្រវត្តិ', product_create: 'បន្ថែមទំនិញ', product_update: 'កែទំនិញ', product_delete: 'លុបទំនិញ',
+            stock_adjust: 'កែស្តុក', settings: 'កែការកំណត់', user_create: 'បន្ថែមអ្នកប្រើ', user_update: 'កែអ្នកប្រើ', user_delete: 'លុបអ្នកប្រើ', backup_download: 'ទាញ Backup' };
+        const AUDIT_RISKY = new Set(['login_failed', 'product_delete', 'user_delete', 'user_update', 'settings', 'backup_download']);
+        async function loadAudit() {
+            try {
+                const rows = await api('/api/admin/audit?limit=300', { auth: true });
+                document.getElementById('auditBody').innerHTML = rows.length ? rows.map(r => {
+                    const risky = AUDIT_RISKY.has(r.action) || (r.action === 'order_status' && /cancelled/.test(r.detail));
+                    return `<tr><td class="small text-secondary text-nowrap">${esc(new Date(r.at).toLocaleString('en-GB'))}</td>
+                        <td>${esc(r.username || 'system')}</td>
+                        <td><span class="badge ${risky ? 'bg-danger' : 'bg-secondary'}">${esc(AUDIT_LABELS[r.action] || r.action)}</span></td>
+                        <td class="small">${esc(r.target)}</td><td class="small" style="word-break:break-word">${esc(r.detail)}</td></tr>`;
+                }).join('') : '<tr><td colspan="5" class="text-center text-secondary py-4">មិនទាន់មានកំណត់ត្រា</td></tr>';
+            } catch (err) { alert(err.message); }
+        }
+        async function testTelegram() {
+            try { const r = await api('/api/admin/telegram/test', { method: 'POST', auth: true }); alert(r.message); }
+            catch (err) { alert(err.message); }
+        }
+
         // ---------- Customer: track my orders ----------
         let myOrders = [];
         try { myOrders = JSON.parse(localStorage.getItem('udom_my_orders') || '[]'); } catch (_) {}
@@ -2160,6 +2205,7 @@
         
         // Admin Auth State
         let isAdminLoggedIn = false;
+        let mustChangePw = false;
 
         // Cart State
         let cart = [];
@@ -2191,6 +2237,9 @@
             adminLoginModalInstance = new bootstrap.Modal(document.getElementById('adminLoginModal'));
             apiConfigModalInstance = new bootstrap.Modal(document.getElementById('apiConfigModal'));
             changePasswordModalInstance = new bootstrap.Modal(document.getElementById('changePasswordModal'));
+            document.getElementById('changePasswordModal').addEventListener('hidden.bs.modal', () => {
+                if (mustChangePw) { mustChangePw = false; clearAdminSession(); setAdminLoggedInState(false); showToast('ត្រូវប្តូរពាក្យសម្ងាត់មុនចូលប្រើ'); }
+            });
             receiptModalInstance = new bootstrap.Modal(document.getElementById('receiptModal'));
             confirmDeleteModalInstance = new bootstrap.Modal(document.getElementById('confirmDeleteModal'));
             toastInstance = new bootstrap.Toast(document.getElementById('orderToast'));
@@ -2198,7 +2247,7 @@
             // Restore admin session (verify token with backend)
             setAdminLoggedInState(false);
             if (adminToken) {
-                try { const me = await api('/api/auth/me', { auth: true }); adminSelf = me.admin; adminRole = me.admin.role || 'owner'; setAdminLoggedInState(true); }
+                try { const me = await api('/api/auth/me', { auth: true }); if (me.admin.mustChange) throw new Error('must change'); adminSelf = me.admin; adminRole = me.admin.role || 'owner'; setAdminLoggedInState(true); }
                 catch (_) { clearAdminSession(); setAdminLoggedInState(false); }
             }
 
@@ -2262,8 +2311,8 @@
 
         // Admin sub-tabs: Products / Orders
         function switchAdminSub(sub) {
-            const panes = { products: 'adminProductsPane', orders: 'adminOrdersPane', banners: 'adminBannersPane', reports: 'adminReportsPane', settings: 'adminSettingsPane' };
-            const btns = { products: 'adminSubProducts', orders: 'adminSubOrders', banners: 'adminSubBanners', reports: 'adminSubReports', settings: 'adminSubSettings' };
+            const panes = { products: 'adminProductsPane', orders: 'adminOrdersPane', banners: 'adminBannersPane', reports: 'adminReportsPane', settings: 'adminSettingsPane', audit: 'adminAuditPane' };
+            const btns = { products: 'adminSubProducts', orders: 'adminSubOrders', banners: 'adminSubBanners', reports: 'adminSubReports', settings: 'adminSubSettings', audit: 'adminSubAudit' };
             for (const k in panes) {
                 document.getElementById(panes[k]).classList.toggle('d-none', k !== sub);
                 const b = document.getElementById(btns[k]);
@@ -2275,6 +2324,7 @@
             if (sub === 'banners') loadAdminBanners();
             if (sub === 'reports') { if (!document.getElementById('reportFrom').value) setReportRange('7d'); else loadReports(); }
             if (sub === 'settings') loadAdminSettings();
+            if (sub === 'audit') loadAudit();
         }
 
         // ----------------------------------------------------
@@ -2348,17 +2398,28 @@
                 adminRole = res.admin.role || 'owner';
                 sessionStorage.setItem('udom_admin_token', adminToken);
                 document.getElementById('loginPassword').value = '';
-                setAdminLoggedInState(true);
-                adminLoginModalInstance.hide();
-                await loadProductsFromDb();
-                await refreshOrders();
-                renderDashboard();
-                renderAdminTable();
-                renderPosProducts();
-                showToast('ចូលប្រើប្រាស់ជា Admin ដោយជោគជ័យ!');
+                if (res.admin.mustChange) { // default password: must be replaced before anything else
+                    adminLoginModalInstance.hide();
+                    mustChangePw = true;
+                    openChangePasswordModal();
+                    showToast('សូមប្តូរពាក្យសម្ងាត់លំនាំដើមមុនបន្ត');
+                    return;
+                }
+                await finishAdminLogin();
             } catch (err) {
                 alert(err.message);
             }
+        }
+
+        async function finishAdminLogin() {
+            setAdminLoggedInState(true);
+            adminLoginModalInstance.hide();
+            await loadProductsFromDb();
+            await refreshOrders();
+            renderDashboard();
+            renderAdminTable();
+            renderPosProducts();
+            showToast('ចូលប្រើប្រាស់ជា Admin ដោយជោគជ័យ!');
         }
 
         async function handleAdminLogout() {
@@ -2385,8 +2446,11 @@
                     currentPassword: document.getElementById('cpCurrent').value,
                     newPassword: document.getElementById('cpNew').value
                 }});
+                const wasForced = mustChangePw;
+                mustChangePw = false;
                 changePasswordModalInstance.hide();
                 showToast('បានប្តូរពាក្យសម្ងាត់ដោយជោគជ័យ!');
+                if (wasForced) await finishAdminLogin();
             } catch (err) { alert(err.message); }
         }
 
@@ -3096,9 +3160,18 @@
         }
 
         async function changeOrderStatus(orderId, newStatus) {
+            let reason = '';
+            if (newStatus === 'cancelled') {
+                const o = orders.find(x => x.id === orderId);
+                if (o && (o.payStatus === 'paid' || o.status === 'completed')) {
+                    if (adminRole !== 'owner') { alert('ការលុបការកម្ម៉ង់ដែលបានបង់ប្រាក់ ឬបម្រើរួច ត្រូវការម្ចាស់ហាង'); return; }
+                    reason = (prompt('មូលហេតុនៃការលុប/សងប្រាក់ (ចាំបាច់):') || '').trim();
+                    if (reason.length < 3) return;
+                } else if (!confirm('លុបការកម្ម៉ង់នេះ? ស្តុកនឹងត្រឡប់មកវិញ។')) return;
+            }
             try {
                 const updated = mapOrder(await api(`/api/admin/orders/${encodeURIComponent(orderId)}/status`,
-                    { method: 'PATCH', auth: true, body: { status: newStatus } }));
+                    { method: 'PATCH', auth: true, body: { status: newStatus, reason } }));
                 const i = orders.findIndex(o => o.id === orderId);
                 if (i > -1) orders[i] = updated;
                 if (knownStatus) knownStatus.set(orderId, newStatus); // avoid double alarm on next poll
