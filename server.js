@@ -121,6 +121,13 @@ if (!db.prepare('PRAGMA table_info(products)').all().some((c) => c.name === 'dis
 // Migrations: roles, payments, order tracking, settings
 const hasCol = (t, c) => db.prepare(`PRAGMA table_info(${t})`).all().some((x) => x.name === c);
 if (!hasCol('admins', 'role')) db.exec("ALTER TABLE admins ADD COLUMN role TEXT NOT NULL DEFAULT 'owner'");
+if (!hasCol('admins', 'must_change')) {
+  db.exec('ALTER TABLE admins ADD COLUMN must_change INTEGER NOT NULL DEFAULT 0');
+  // Existing accounts still using the well-known default password must change it at next login
+  for (const a of db.prepare('SELECT id, password_hash FROM admins').all()) {
+    if (bcrypt.compareSync('123456', a.password_hash)) db.prepare('UPDATE admins SET must_change = 1 WHERE id = ?').run(a.id);
+  }
+}
 for (const [col, ddl] of [
   ['pay_status', "TEXT NOT NULL DEFAULT 'unpaid'"],   // unpaid | paid | refunded
   ['pay_method', "TEXT NOT NULL DEFAULT ''"],         // cash | khqr | other
@@ -130,11 +137,95 @@ for (const [col, ddl] of [
   ['rate', 'REAL NOT NULL DEFAULT 0'],
   ['paid_at', 'TEXT'],
   ['track_code', 'TEXT'],
+  ['ip', "TEXT NOT NULL DEFAULT ''"],
 ]) {
   if (!hasCol('orders', col)) db.exec(`ALTER TABLE orders ADD COLUMN ${col} ${ddl}`);
 }
 db.exec('CREATE INDEX IF NOT EXISTS idx_orders_track ON orders(track_code)');
 db.exec('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+db.exec(`CREATE TABLE IF NOT EXISTS audit_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at TEXT NOT NULL DEFAULT (datetime('now')),
+  admin_id INTEGER, username TEXT NOT NULL DEFAULT '',
+  action TEXT NOT NULL, target TEXT NOT NULL DEFAULT '', detail TEXT NOT NULL DEFAULT ''
+)`);
+// Who did what. `req` may be null (system actions) or any object with .admin
+const audit = (req, action, target = '', detail = '') => {
+  try {
+    db.prepare('INSERT INTO audit_log (admin_id, username, action, target, detail) VALUES (?, ?, ?, ?, ?)')
+      .run(req && req.admin ? req.admin.id : null, req && req.admin ? req.admin.username : 'system', action, String(target).slice(0, 80), String(detail).slice(0, 300));
+  } catch (e) { console.error('audit failed:', e.message); }
+};
+
+// ---- Telegram (optional: set TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID) ----
+const TG_API = process.env.TELEGRAM_API || 'https://api.telegram.org';
+const tgOn = () => !!(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID);
+async function tgSend(text) {
+  if (!tgOn()) return false;
+  try {
+    const r = await fetch(`${TG_API}/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: process.env.TELEGRAM_CHAT_ID, text: String(text).slice(0, 3900) }), signal: AbortSignal.timeout(10000),
+    });
+    return r.ok;
+  } catch (e) { console.error('Telegram:', e.message); return false; }
+}
+async function tgSendFile(file, caption) {
+  if (!tgOn()) return false;
+  try {
+    const fd = new FormData();
+    fd.append('chat_id', process.env.TELEGRAM_CHAT_ID);
+    fd.append('caption', caption);
+    fd.append('document', new Blob([fs.readFileSync(file)]), path.basename(file));
+    const r = await fetch(`${TG_API}/bot${process.env.TELEGRAM_BOT_TOKEN}/sendDocument`, { method: 'POST', body: fd, signal: AbortSignal.timeout(60000) });
+    return r.ok;
+  } catch (e) { console.error('Telegram file:', e.message); return false; }
+}
+function tgAfterOrder(order, items) {
+  if (!tgOn()) return;
+  const lines = order.items.map((i) => `• ${i.name} ×${i.quantity}${i.sugar ? ' (ស្ករ ' + i.sugar + ')' : ''}${i.note ? ' 📝 ' + i.note : ''}`).join('\n');
+  tgSend(`🔔 ការកម្ម៉ង់ថ្មី ${order.id}\n👤 ${order.customerName} · ${order.tableNo}\n${lines}\n💰 $${order.total.toFixed(2)}`);
+  const low = Number(process.env.LOW_STOCK ?? 5), qty = {};
+  for (const it of items) qty[it.id] = (qty[it.id] || 0) + Number(it.quantity);
+  for (const [pid, q] of Object.entries(qty)) {
+    const p = db.prepare('SELECT name, stock FROM products WHERE id = ?').get(pid);
+    if (p && p.stock <= low && p.stock + q > low) tgSend(`⚠️ ស្តុកជិតអស់: ${p.name} នៅសល់ ${p.stock}`);
+  }
+}
+
+// ---- Housekeeping: auto-cancel stale unaccepted orders + daily Telegram summary ----
+function expireStale() {
+  const ttl = Number(process.env.PENDING_TTL_MIN ?? 20); // 0 disables
+  if (!(ttl > 0)) return;
+  const rows = db.prepare("SELECT seq FROM orders WHERE status = 'pending' AND pay_status = 'unpaid' AND created_at < datetime('now', ?)").all(`-${ttl} minutes`);
+  for (const r of rows) {
+    tx(() => {
+      const o = db.prepare('SELECT status FROM orders WHERE seq = ?').get(r.seq);
+      if (!o || o.status !== 'pending') return;
+      for (const it of db.prepare('SELECT product_id, quantity FROM order_items WHERE order_seq = ?').all(r.seq)) {
+        db.prepare('UPDATE products SET stock = stock + ? WHERE id = ?').run(it.quantity, it.product_id);
+      }
+      db.prepare("UPDATE orders SET status = 'cancelled' WHERE seq = ?").run(r.seq);
+      audit(null, 'order_auto_cancel', 'ORD-' + (1000 + r.seq), `មិនទាន់ទទួលយកក្នុង ${ttl} នាទី`);
+    })();
+  }
+}
+function dailySummaryIfDue() {
+  const hour = Number(process.env.SUMMARY_HOUR ?? 21);
+  if (!tgOn() || !(hour >= 0 && hour <= 23)) return;
+  const local = new Date(Date.now() + TZ_HOURS * 3600e3), today = local.toISOString().slice(0, 10);
+  if (local.getUTCHours() < hour || getSetting('last_summary', '') === today) return;
+  setSetting('last_summary', today);
+  const p = [TZ_MOD, today, today];
+  const s = db.prepare("SELECT COUNT(*) AS n, COALESCE(SUM(total),0) AS rev, COALESCE(SUM(CASE WHEN pay_status='paid' THEN total END),0) AS paid FROM orders WHERE status != 'cancelled' AND date(created_at, ?) BETWEEN ? AND ?").get(...p);
+  const c = db.prepare("SELECT COUNT(*) AS n FROM orders WHERE status = 'cancelled' AND date(created_at, ?) BETWEEN ? AND ?").get(...p).n;
+  const top = db.prepare("SELECT oi.name AS name, SUM(oi.quantity) AS q FROM order_items oi JOIN orders o ON o.seq = oi.order_seq WHERE o.status != 'cancelled' AND date(o.created_at, ?) BETWEEN ? AND ? GROUP BY oi.name ORDER BY q DESC LIMIT 3").all(...p);
+  tgSend(`📊 សរុបលក់ថ្ងៃនេះ (${today})\nការកម្ម៉ង់: ${s.n} (លុប ${c})\nចំណូល: $${s.rev.toFixed(2)}\nបានទទួលប្រាក់: $${s.paid.toFixed(2)}\nមិនទាន់បង់: $${(s.rev - s.paid).toFixed(2)}` +
+    (top.length ? '\n🏆 ' + top.map((t) => `${t.name} ×${t.q}`).join(', ') : ''));
+}
+function maintenance() {
+  try { expireStale(); dailySummaryIfDue(); } catch (e) { console.error('maintenance:', e.message); }
+}
 
 const getSetting = (k, d = '') => { const r = db.prepare('SELECT value FROM settings WHERE key = ?').get(k); return r ? r.value : d; };
 const setSetting = (k, v) => db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(k, String(v));
@@ -168,7 +259,7 @@ if (db.prepare('SELECT COUNT(*) AS n FROM banners').get().n === 0) {
 if (db.prepare('SELECT COUNT(*) AS n FROM admins').get().n === 0) {
   const u = process.env.ADMIN_USERNAME || 'admin';
   const p = process.env.ADMIN_PASSWORD || '123456';
-  db.prepare("INSERT INTO admins (username, password_hash, role) VALUES (?, ?, 'owner')").run(u, bcrypt.hashSync(p, 10));
+  db.prepare("INSERT INTO admins (username, password_hash, role, must_change) VALUES (?, ?, 'owner', ?)").run(u, bcrypt.hashSync(p, 10), process.env.ADMIN_PASSWORD ? 0 : 1);
   if (!process.env.ADMIN_PASSWORD) {
     console.warn('\n⚠️  Default admin created: admin / 123456 — please change the password right after first login!\n');
   }
@@ -313,7 +404,8 @@ function parseProduct(body, { partial = false } = {}) {
 const app = express();
 app.set('trust proxy', 1);
 app.use(helmet({ contentSecurityPolicy: false, crossOriginResourcePolicy: { policy: 'cross-origin' } }));
-app.use(cors({ origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : true }));
+// Same-origin only by default. Set CORS_ORIGIN=https://your-front-end (comma separated) to allow another site.
+if (process.env.CORS_ORIGIN) app.use(cors({ origin: process.env.CORS_ORIGIN.split(',') }));
 app.use(express.json({ limit: '100kb' }));
 
 // Auth middleware
@@ -321,16 +413,19 @@ function requireAdmin(req, res, next) {
   const h = req.headers.authorization || '';
   const token = h.startsWith('Bearer ') ? h.slice(7) : null;
   if (!token) return next(new HttpError(401, 'តម្រូវឱ្យចូលប្រើជា Admin'));
+  let a;
   try {
     const payload = jwt.verify(token, JWT_SECRET);
     // Always read role from DB so a removed user / changed role takes effect immediately
-    const a = db.prepare('SELECT id, username, role FROM admins WHERE id = ?').get(payload.sub);
+    a = db.prepare('SELECT id, username, role, must_change FROM admins WHERE id = ?').get(payload.sub);
     if (!a) throw new Error('admin removed');
-    req.admin = a;
-    next();
   } catch {
-    next(new HttpError(401, 'Session ផុតកំណត់ សូមចូលប្រើម្តងទៀត'));
+    return next(new HttpError(401, 'Session ផុតកំណត់ សូមចូលប្រើម្តងទៀត'));
   }
+  req.admin = { id: a.id, username: a.username, role: a.role, mustChange: !!a.must_change };
+  // Default password in use: nothing works except changing it
+  if (req.admin.mustChange && !req.originalUrl.startsWith('/api/auth/')) return next(new HttpError(403, 'សូមប្តូរពាក្យសម្ងាត់លំនាំដើមជាមុនសិន'));
+  next();
 }
 
 // Image upload
@@ -364,9 +459,10 @@ app.post('/api/auth/login', loginLimiter, (req, res) => {
   // Always run a compare to keep timing similar whether or not the user exists
   const hash = admin ? admin.password_hash : '$2a$10$invalidinvalidinvalidinvalidinvalidinvalidinvalidinvali';
   const ok = bcrypt.compareSync(password, hash);
-  if (!admin || !ok) return res.status(401).json({ error: 'ឈ្មោះអ្នកប្រើ ឬពាក្យសម្ងាត់មិនត្រឹមត្រូវ!' });
+  if (!admin || !ok) { audit(null, 'login_failed', username.slice(0, 40), 'IP ' + req.ip); return res.status(401).json({ error: 'ឈ្មោះអ្នកប្រើ ឬពាក្យសម្ងាត់មិនត្រឹមត្រូវ!' }); }
   const token = jwt.sign({ sub: admin.id, username: admin.username }, JWT_SECRET, { expiresIn: TOKEN_TTL });
-  res.json({ token, admin: { id: admin.id, username: admin.username, role: admin.role } });
+  audit({ admin }, 'login', '', 'IP ' + req.ip);
+  res.json({ token, admin: { id: admin.id, username: admin.username, role: admin.role, mustChange: !!admin.must_change } });
 });
 
 app.get('/api/auth/me', requireAdmin, (req, res) => res.json({ admin: req.admin }));
@@ -375,9 +471,11 @@ app.post('/api/auth/change-password', requireAdmin, (req, res) => {
   const current = String(req.body.currentPassword ?? '');
   const next = String(req.body.newPassword ?? '');
   if (next.length < 6) throw new HttpError(400, 'ពាក្យសម្ងាត់ថ្មីត្រូវមានយ៉ាងតិច ៦ តួអក្សរ');
+  if (next === '123456' || next === current) throw new HttpError(400, 'សូមជ្រើសពាក្យសម្ងាត់ថ្មីដែលខុសពីមុន និងមិនងាយទាយ');
   const admin = db.prepare('SELECT * FROM admins WHERE id = ?').get(req.admin.id);
   if (!bcrypt.compareSync(current, admin.password_hash)) throw new HttpError(400, 'ពាក្យសម្ងាត់បច្ចុប្បន្នមិនត្រឹមត្រូវ');
-  db.prepare('UPDATE admins SET password_hash = ? WHERE id = ?').run(bcrypt.hashSync(next, 10), admin.id);
+  db.prepare('UPDATE admins SET password_hash = ?, must_change = 0 WHERE id = ?').run(bcrypt.hashSync(next, 10), admin.id);
+  audit(req, 'password_change');
   res.json({ ok: true });
 });
 
@@ -427,16 +525,19 @@ app.post('/api/orders', orderLimiter, (req, res) => {
   const tableNo = String(req.body.tableNo ?? '').trim().slice(0, 40) || 'តុទូទៅ';
   const items = Array.isArray(req.body.items) ? req.body.items : [];
   if (!items.length || items.length > 50) throw new HttpError(400, 'កន្ត្រកទទេ ឬធំពេក');
+  const perIp = Number(process.env.PENDING_PER_IP ?? 10);
+  if (perIp > 0 && db.prepare("SELECT COUNT(*) AS n FROM orders WHERE ip = ? AND status = 'pending'").get(req.ip || '').n >= perIp)
+    throw new HttpError(429, 'មានការកម្ម៉ង់កំពុងរង់ចាំច្រើនពេក សូមរង់ចាំបុគ្គលិកទទួលយកជាមុន');
 
   const getProduct = db.prepare('SELECT * FROM products WHERE id = ?');
   const decStock = db.prepare('UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?');
   const trackCode = crypto.randomBytes(9).toString('base64url');
-  const insOrder = db.prepare('INSERT INTO orders (customer_name, table_no, total, track_code) VALUES (?, ?, 0, ?)');
+  const insOrder = db.prepare('INSERT INTO orders (customer_name, table_no, total, track_code, ip) VALUES (?, ?, 0, ?, ?)');
   const insItem = db.prepare('INSERT INTO order_items (order_seq, product_id, name, price, quantity, sugar, note) VALUES (?, ?, ?, ?, ?, ?, ?)');
   const setTotal = db.prepare('UPDATE orders SET total = ? WHERE seq = ?');
 
   const create = tx(() => {
-    const { lastInsertRowid: seq } = insOrder.run(customerName, tableNo, trackCode);
+    const { lastInsertRowid: seq } = insOrder.run(customerName, tableNo, trackCode, req.ip || '');
     let total = 0;
     for (const it of items) {
       const qty = Number(it.quantity);
@@ -456,7 +557,9 @@ app.post('/api/orders', orderLimiter, (req, res) => {
   });
 
   const seq = create();
-  res.status(201).json({ ...loadOrders('WHERE seq = ?', [seq])[0], trackCode });
+  const created = loadOrders('WHERE seq = ?', [seq])[0];
+  tgAfterOrder(created, items);
+  res.status(201).json({ ...created, trackCode });
 });
 
 // ---------------- Admin API (JWT required) ----------------
@@ -478,6 +581,7 @@ admin.post('/products', (req, res) => {
   const id = 'prod-' + Date.now() + '-' + crypto.randomBytes(2).toString('hex');
   db.prepare(`INSERT INTO products (id, name, category, price, discount, stock, status, description, image)
               VALUES (@id, @name, @category, @price, @discount, @stock, @status, @description, @image)`).run({ id, ...data });
+  audit(req, 'product_create', id, `${data.name} $${data.price} stock ${data.stock}`);
   res.status(201).json(productOut(db.prepare('SELECT * FROM products WHERE id = ?').get(id)));
 });
 
@@ -487,6 +591,7 @@ admin.put('/products/:id', (req, res) => {
   const data = parseProduct(req.body);
   db.prepare(`UPDATE products SET name=@name, category=@category, price=@price, discount=@discount, stock=@stock,
               status=@status, description=@description, image=@image WHERE id=@id`).run({ id: req.params.id, ...data });
+  audit(req, 'product_update', req.params.id, `${existing.name}: $${existing.price}→$${data.price}, ស្តុក ${existing.stock}→${data.stock}, បញ្ចុះ ${existing.discount || 0}→${data.discount}%, ${existing.status}→${data.status}`);
   res.json(productOut(db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id)));
 });
 
@@ -498,6 +603,7 @@ admin.patch('/products/:id', (req, res) => {
   const keys = Object.keys(data);
   if (!keys.length) throw new HttpError(400, 'គ្មានទិន្នន័យត្រូវកែ');
   db.prepare(`UPDATE products SET ${keys.map((k) => `${k} = @${k}`).join(', ')} WHERE id = @id`).run({ id: req.params.id, ...data });
+  audit(req, 'product_update', req.params.id, `${existing.name}: ${keys.map((k) => `${k} ${existing[k]}→${data[k]}`).join(', ')}`);
   res.json(productOut(db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id)));
 });
 
@@ -507,6 +613,7 @@ admin.post('/products/:id/stock', (req, res) => {
   if (!Number.isInteger(delta) || Math.abs(delta) > 100000) throw new HttpError(400, 'delta មិនត្រឹមត្រូវ');
   const r = db.prepare('UPDATE products SET stock = MAX(0, stock + ?) WHERE id = ?').run(delta, req.params.id);
   if (!r.changes) throw new HttpError(404, 'រកមិនឃើញទំនិញ');
+  audit(req, 'stock_adjust', req.params.id, `${delta > 0 ? '+' : ''}${delta}`);
   res.json(productOut(db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id)));
 });
 
@@ -514,6 +621,7 @@ admin.delete('/products/:id', (req, res) => {
   const p = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
   if (!p) throw new HttpError(404, 'រកមិនឃើញទំនិញ');
   db.prepare('DELETE FROM products WHERE id = ?').run(req.params.id);
+  audit(req, 'product_delete', req.params.id, p.name);
   // Remove the uploaded file if it was ours and nothing else uses it
   if (p.image.startsWith('/uploads/')) {
     const still = db.prepare('SELECT 1 FROM products WHERE image = ? UNION SELECT 1 FROM banners WHERE image = ? UNION SELECT 1 FROM settings WHERE value = ?').get(p.image, p.image, p.image);
@@ -613,23 +721,36 @@ admin.get('/orders', (req, res) => {
 admin.patch('/orders/:id/status', (req, res) => {
   const seq = seqFromOrderId(req.params.id);
   const status = req.body.status;
+  const reason = String(req.body.reason ?? '').trim().slice(0, 200);
   if (!ORDER_STATUSES.includes(status)) throw new HttpError(400, 'status មិនត្រឹមត្រូវ');
-  // Cancelling restores stock (once)
-  const updateStatus = tx(() => {
+  const FLOW = { pending: ['preparing', 'completed', 'cancelled'], preparing: ['completed', 'cancelled'], completed: ['cancelled'], cancelled: [] };
+  let prev = null, moneyCancel = null;
+  tx(() => {
     const o = db.prepare('SELECT * FROM orders WHERE seq = ?').get(seq);
     if (!o) throw new HttpError(404, 'រកមិនឃើញការកម្ម៉ង់');
     if (o.status === status) return;
+    if (!FLOW[o.status].includes(status)) {
+      throw new HttpError(409, o.status === 'cancelled' ? 'ការកម្ម៉ង់ដែលបានបោះបង់ មិនអាចបើកឡើងវិញបានទេ' : 'មិនអាចប្តូរស្ថានភាពថយក្រោយបានទេ');
+    }
     if (status === 'cancelled') {
+      const risky = o.pay_status === 'paid' || o.status === 'completed'; // money taken or drink already served
+      if (risky) {
+        if (req.admin.role !== 'owner') throw new HttpError(403, 'ការលុបការកម្ម៉ង់ដែលបានបង់ប្រាក់ ឬបម្រើរួច ត្រូវការម្ចាស់ហាង');
+        if (reason.length < 3) throw new HttpError(400, 'សូមបញ្ចូលមូលហេតុនៃការលុប/សងប្រាក់');
+        moneyCancel = { total: o.total };
+      }
       for (const it of db.prepare('SELECT product_id, quantity FROM order_items WHERE order_seq = ?').all(seq)) {
         db.prepare('UPDATE products SET stock = stock + ? WHERE id = ?').run(it.quantity, it.product_id);
       }
-    } else if (o.status === 'cancelled') {
-      throw new HttpError(409, 'ការកម្ម៉ង់ដែលបានបោះបង់ មិនអាចបើកឡើងវិញបានទេ');
+      db.prepare("UPDATE orders SET pay_status = 'refunded' WHERE seq = ? AND pay_status = 'paid'").run(seq);
     }
+    prev = o.status;
     db.prepare('UPDATE orders SET status = ? WHERE seq = ?').run(status, seq);
-    if (status === 'cancelled') db.prepare("UPDATE orders SET pay_status = 'refunded' WHERE seq = ? AND pay_status = 'paid'").run(seq);
-  });
-  updateStatus();
+  })();
+  if (prev) {
+    audit(req, 'order_status', req.params.id, `${prev} → ${status}${reason ? ': ' + reason : ''}`);
+    if (moneyCancel) tgSend(`↩️ លុប/សងប្រាក់ ${req.params.id} ($${moneyCancel.total.toFixed(2)})\nដោយ ${req.admin.username}\nមូលហេតុ: ${reason}`);
+  }
   res.json(loadOrders('WHERE seq = ?', [seq])[0]);
 });
 
@@ -661,6 +782,7 @@ admin.post('/orders/:id/pay', (req, res) => {
     db.prepare("UPDATE orders SET pay_status = 'paid', pay_method = ?, received = ?, received_cur = ?, change_usd = ?, rate = ?, paid_at = datetime('now') WHERE seq = ?")
       .run(method, received, cur, changeUsd, rate, seq);
   })();
+  audit(req, 'order_pay', req.params.id, `${method} ${method === 'cash' ? received + ' ' + cur : ''}`.trim());
   res.json(loadOrders('WHERE seq = ?', [seq])[0]);
 });
 
@@ -673,8 +795,10 @@ admin.put('/settings', (req, res) => {
   if (!Number.isFinite(rate) || rate < 100 || rate > 100000) throw new HttpError(400, 'អត្រាប្តូរប្រាក់មិនត្រឹមត្រូវ');
   const oldQr = getSetting('khqr_image', '');
   const qr = parseImage(req.body.khqrImage, false);
+  const oldRate = getRate();
   setSetting('exchange_rate', rate);
   setSetting('khqr_image', qr);
+  audit(req, 'settings', '', `អត្រា ${oldRate}→${rate}${oldQr !== qr ? ', ប្តូររូប KHQR' : ''}`);
   if (oldQr && oldQr !== qr) removeUploadIfUnused(oldQr);
   res.json({ exchangeRate: getRate(), khqrImage: getSetting('khqr_image', '') });
 });
@@ -724,7 +848,11 @@ admin.get('/reports', (req, res) => {
 admin.get('/reports/export', (req, res) => {
   const { from, to } = reportRange(req.query);
   const rows = loadOrders('WHERE date(created_at, ?) BETWEEN ? AND ?', [TZ_MOD, from, to]).reverse();
-  const q = (v) => '"' + String(v ?? '').replace(/"/g, '""') + '"';
+  const q = (v) => { // neutralise spreadsheet formulas (=, +, -, @) in text typed by customers
+    let t = String(v ?? '');
+    if (typeof v === 'string' && /^[=+\-@\t\r]/.test(t)) t = "'" + t;
+    return '"' + t.replace(/"/g, '""') + '"';
+  };
   const local = (iso) => new Date(Date.parse(iso) + TZ_HOURS * 3600e3).toISOString().replace('T', ' ').slice(0, 16);
   const head = ['Order', 'Date', 'Customer', 'Table', 'Items', 'Total USD', 'Status', 'Payment status', 'Method', 'Received', 'Currency', 'Change USD'];
   const lines = [head.map(q).join(',')];
@@ -758,12 +886,16 @@ function listBackups() {
 function autoBackup() {
   try {
     const last = listBackups()[0];
-    if (!last || Date.now() - Date.parse(last.createdAt) > 20 * 3600e3) makeBackup('auto');
+    if (!last || Date.now() - Date.parse(last.createdAt) > 20 * 3600e3) {
+      const n = makeBackup('auto');
+      tgSendFile(path.join(BACKUP_DIR, n), '💾 Backup ' + n);
+    }
     for (const b of listBackups().slice(7)) fs.unlink(path.join(BACKUP_DIR, b.name), () => {}); // keep the newest 7
   } catch (e) { console.error('Auto-backup failed:', e.message); }
 }
 
 admin.get('/backup', (req, res, next) => {
+  audit(req, 'backup_download');
   const name = makeBackup('manual');
   const file = path.join(BACKUP_DIR, name);
   res.download(file, name, (err) => { fs.unlink(file, () => {}); if (err && !res.headersSent) next(err); });
@@ -791,6 +923,7 @@ admin.post('/users', (req, res) => {
   if (!ROLES.includes(role)) throw new HttpError(400, 'តួនាទីមិនត្រឹមត្រូវ');
   if (db.prepare('SELECT 1 FROM admins WHERE username = ?').get(username)) throw new HttpError(409, 'ឈ្មោះគណនីនេះមានរួចហើយ');
   const { lastInsertRowid: id } = db.prepare('INSERT INTO admins (username, password_hash, role) VALUES (?, ?, ?)').run(username, bcrypt.hashSync(password, 10), role);
+  audit(req, 'user_create', username, role);
   res.status(201).json(db.prepare('SELECT id, username, role, created_at FROM admins WHERE id = ?').get(id));
 });
 admin.patch('/users/:id', (req, res) => {
@@ -807,6 +940,7 @@ admin.patch('/users/:id', (req, res) => {
     if (pw.length < 6) throw new HttpError(400, 'ពាក្យសម្ងាត់ត្រូវមានយ៉ាងតិច ៦ តួអក្សរ');
     db.prepare('UPDATE admins SET password_hash = ? WHERE id = ?').run(bcrypt.hashSync(pw, 10), id);
   }
+  audit(req, 'user_update', u.username, `${req.body.role !== undefined ? 'role ' + u.role + '→' + req.body.role : ''}${req.body.password !== undefined ? ' ប្តូរពាក្យសម្ងាត់' : ''}`.trim());
   res.json(db.prepare('SELECT id, username, role, created_at FROM admins WHERE id = ?').get(id));
 });
 admin.delete('/users/:id', (req, res) => {
@@ -816,8 +950,20 @@ admin.delete('/users/:id', (req, res) => {
   if (id === req.admin.id) throw new HttpError(400, 'មិនអាចលុបគណនីរបស់ខ្លួនឯងបានទេ');
   if (u.role === 'owner' && ownersCount() <= 1) throw new HttpError(400, 'ត្រូវមានម្ចាស់ហាងយ៉ាងតិចម្នាក់');
   db.prepare('DELETE FROM admins WHERE id = ?').run(id);
+  audit(req, 'user_delete', u.username);
   res.json({ ok: true });
 });
+
+admin.get('/audit', (req, res) => {
+  const limit = Math.min(Number(req.query.limit) || 200, 1000);
+  res.json(db.prepare('SELECT id, at, username, action, target, detail FROM audit_log ORDER BY id DESC LIMIT ?').all(limit)
+    .map((r) => ({ ...r, at: r.at.replace(' ', 'T') + 'Z' })));
+});
+admin.post('/telegram/test', asyncH(async (req, res) => {
+  if (!tgOn()) return res.json({ ok: false, message: 'មិនទាន់កំណត់ TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID ក្នុង .env' });
+  const ok = await tgSend('✅ សារសាកល្បងពី កាហ្វេ ម្លប់ដូង (' + req.admin.username + ')');
+  res.json({ ok, message: ok ? 'បានផ្ញើសារសាកល្បងរួចរាល់ សូមពិនិត្យ Telegram' : 'ផ្ញើមិនបាន សូមពិនិត្យ token និង chat id' });
+}));
 
 app.use('/api/admin', admin);
 
@@ -842,6 +988,8 @@ app.use((err, req, res, next) => {
 if (require.main === module) {
   autoBackup();                                   // on start (skipped if one exists from the last 20h)
   setInterval(autoBackup, 6 * 3600e3).unref();    // then check every 6h
+  maintenance();
+  setInterval(maintenance, Number(process.env.MAINT_MS) || 60e3).unref(); // auto-cancel stale orders, daily Telegram summary
   app.listen(PORT, () => console.log(`☕ Mlob Doung Coffee running on http://localhost:${PORT}`));
 }
 module.exports = app;
