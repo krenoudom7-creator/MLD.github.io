@@ -23,8 +23,8 @@ try {
 // Config
 // ---------------------------------------------------------------
 const PORT = process.env.PORT || 3000;
-const DATA_DIR = path.join(__dirname, 'data');
-const UPLOAD_DIR = path.join(__dirname, 'uploads');
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');   // e.g. /var/data/db on a Render disk
+const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, 'uploads'); // e.g. /var/data/uploads
 const PUBLIC_DIR = path.join(__dirname, 'public');
 fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
@@ -142,6 +142,15 @@ for (const [col, ddl] of [
   if (!hasCol('orders', col)) db.exec(`ALTER TABLE orders ADD COLUMN ${col} ${ddl}`);
 }
 db.exec('CREATE INDEX IF NOT EXISTS idx_orders_track ON orders(track_code)');
+if (!hasCol('products', 'options')) db.exec("ALTER TABLE products ADD COLUMN options TEXT NOT NULL DEFAULT '[]'");
+if (!hasCol('order_items', 'options')) db.exec("ALTER TABLE order_items ADD COLUMN options TEXT NOT NULL DEFAULT ''");
+db.exec(`CREATE TABLE IF NOT EXISTS shifts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  opened_at TEXT NOT NULL DEFAULT (datetime('now')), opened_by TEXT NOT NULL,
+  open_usd REAL NOT NULL DEFAULT 0, open_khr REAL NOT NULL DEFAULT 0,
+  closed_at TEXT, closed_by TEXT, count_usd REAL, count_khr REAL, exp_usd REAL, exp_khr REAL,
+  note TEXT NOT NULL DEFAULT ''
+)`);
 db.exec('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
 db.exec(`CREATE TABLE IF NOT EXISTS audit_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -183,7 +192,7 @@ async function tgSendFile(file, caption) {
 }
 function tgAfterOrder(order, items) {
   if (!tgOn()) return;
-  const lines = order.items.map((i) => `• ${i.name} ×${i.quantity}${i.sugar ? ' (ស្ករ ' + i.sugar + ')' : ''}${i.note ? ' 📝 ' + i.note : ''}`).join('\n');
+  const lines = order.items.map((i) => `• ${i.name} ×${i.quantity}${i.options && i.options.length ? ' [' + i.options.map((o) => o.label).join('/') + ']' : ''}${i.sugar ? ' (ស្ករ ' + i.sugar + ')' : ''}${i.note ? ' 📝 ' + i.note : ''}`).join('\n');
   tgSend(`🔔 ការកម្ម៉ង់ថ្មី ${order.id}\n👤 ${order.customerName} · ${order.tableNo}\n${lines}\n💰 $${order.total.toFixed(2)}`);
   const low = Number(process.env.LOW_STOCK ?? 5), qty = {};
   for (const it of items) qty[it.id] = (qty[it.id] || 0) + Number(it.quantity);
@@ -292,22 +301,23 @@ class HttpError extends Error {
 
 // Price after discount, rounded to cents
 const finalPrice = (price, discount) => Math.round(price * (100 - (discount || 0))) / 100;
+const safeParse = (t) => { try { const v = JSON.parse(t || '[]'); return Array.isArray(v) ? v : []; } catch { return []; } };
 
 const productOut = (r) => ({
   id: r.id, name: r.name, category: r.category, price: r.price, stock: r.stock,
   discount: r.discount || 0, finalPrice: finalPrice(r.price, r.discount),
-  status: r.status, description: r.description, image: r.image, created_at: r.created_at,
+  status: r.status, description: r.description, image: r.image, options: safeParse(r.options), created_at: r.created_at,
 });
 
 function loadOrders(whereSql = '', params = []) {
   const rows = db.prepare(`SELECT * FROM orders ${whereSql} ORDER BY seq DESC`).all(...params);
   if (!rows.length) return [];
-  const itemsStmt = db.prepare('SELECT name, price, quantity, sugar, note FROM order_items WHERE order_seq = ? ORDER BY id');
+  const itemsStmt = db.prepare('SELECT name, price, quantity, sugar, note, options FROM order_items WHERE order_seq = ? ORDER BY id');
   return rows.map((o) => ({
     id: 'ORD-' + (1000 + o.seq),
     customerName: o.customer_name,
     tableNo: o.table_no,
-    items: itemsStmt.all(o.seq),
+    items: itemsStmt.all(o.seq).map((i) => ({ ...i, options: safeParse(i.options) })),
     total: o.total,
     status: o.status,
     payStatus: o.pay_status,
@@ -351,6 +361,23 @@ function removeUploadIfUnused(img) {
   if (!still) fs.unlink(path.join(UPLOAD_DIR, path.basename(img)), () => {});
 }
 
+// Option groups (size, ice, toppings...): [{ name, choices: [{ label, price }] }], one choice per group, first is the default
+function parseOptions(v) {
+  if (v === undefined || v === null || v === '') return [];
+  const arr = typeof v === 'string' ? safeParse(v) : v;
+  if (!Array.isArray(arr) || arr.length > 5) throw new HttpError(400, 'ជម្រើសបន្ថែមមិនត្រឹមត្រូវ (អតិបរមា ៥ ក្រុម)');
+  return arr.map((g) => {
+    const name = String((g && g.name) ?? '').trim().slice(0, 30);
+    const ch = g && Array.isArray(g.choices) ? g.choices : [];
+    if (!name || ch.length < 1 || ch.length > 8) throw new HttpError(400, `ក្រុមជម្រើស "${name}" ត្រូវមាន 1-8 ជម្រើស`);
+    return { name, choices: ch.map((c) => {
+      const label = String((c && c.label) ?? '').trim().slice(0, 30), price = Math.round(Number((c && c.price) ?? 0) * 100) / 100;
+      if (!label || !Number.isFinite(price) || price < 0 || price > 50) throw new HttpError(400, `ជម្រើស "${label}" មិនត្រឹមត្រូវ`);
+      return { label, price };
+    }) };
+  });
+}
+
 // Validation for product payloads
 function parseProduct(body, { partial = false } = {}) {
   const out = {};
@@ -389,6 +416,7 @@ function parseProduct(body, { partial = false } = {}) {
     if (d.length > 500) throw new HttpError(400, 'ការពិពណ៌នាវែងពេក');
     out.description = d;
   }
+  if (!partial || has('options')) out.options = JSON.stringify(parseOptions(body.options));
   if (!partial || has('image')) {
     const img = String(body.image ?? '').trim();
     // Only allow our own uploads or http(s) URLs (blocks javascript:/data: payloads)
@@ -488,7 +516,7 @@ app.get('/api/products', (req, res) => {
 
 // Public settings (exchange rate + KHQR image for paying)
 app.get('/api/settings', (req, res) => {
-  res.json({ exchangeRate: getRate(), khqrImage: getSetting('khqr_image', '') });
+  res.json({ exchangeRate: getRate(), khqrImage: getSetting('khqr_image', ''), orderingPaused: getSetting('ordering_paused', '0') === '1' });
 });
 
 // Customer order tracking: only reachable with the unguessable code returned when ordering
@@ -521,6 +549,7 @@ const orderLimiter = rateLimit({ windowMs: 60 * 1000, max: 15, standardHeaders: 
 // stock is checked and deducted atomically.
 // NOTE: this is the ONLY public order endpoint. Listing / updating orders is admin-only.
 app.post('/api/orders', orderLimiter, (req, res) => {
+  if (getSetting('ordering_paused', '0') === '1') throw new HttpError(409, 'ហាងកំពុងផ្អាកទទួលការកម្ម៉ង់ជាបណ្តោះអាសន្ន សូមព្យាយាមម្តងទៀតបន្តិចក្រោយ');
   const customerName = String(req.body.customerName ?? '').trim().slice(0, 80) || 'អតិថិជនទូទៅ';
   const tableNo = String(req.body.tableNo ?? '').trim().slice(0, 40) || 'តុទូទៅ';
   const items = Array.isArray(req.body.items) ? req.body.items : [];
@@ -533,7 +562,7 @@ app.post('/api/orders', orderLimiter, (req, res) => {
   const decStock = db.prepare('UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?');
   const trackCode = crypto.randomBytes(9).toString('base64url');
   const insOrder = db.prepare('INSERT INTO orders (customer_name, table_no, total, track_code, ip) VALUES (?, ?, 0, ?, ?)');
-  const insItem = db.prepare('INSERT INTO order_items (order_seq, product_id, name, price, quantity, sugar, note) VALUES (?, ?, ?, ?, ?, ?, ?)');
+  const insItem = db.prepare('INSERT INTO order_items (order_seq, product_id, name, price, quantity, sugar, note, options) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
   const setTotal = db.prepare('UPDATE orders SET total = ? WHERE seq = ?');
 
   const create = tx(() => {
@@ -547,8 +576,16 @@ app.post('/api/orders', orderLimiter, (req, res) => {
       if (decStock.run(qty, p.id, qty).changes === 0) throw new HttpError(409, `ទំនិញ "${p.name}" អស់ស្តុក ឬមិនគ្រប់ចំនួន (នៅសល់ ${p.stock})`);
       const sugar = String(it.sugar ?? '').slice(0, 20);
       const note = String(it.note ?? '').replace(/\s+/g, ' ').trim().slice(0, 100);
-      const unit = finalPrice(p.price, p.discount); // discounted unit price, computed on the server
-      insItem.run(seq, p.id, p.name, unit, qty, sugar, note);
+      // chosen options are re-validated against the product's own option groups; price delta comes from the server
+      const picked = Array.isArray(it.options) ? it.options : [], chosen = [];
+      for (const g of safeParse(p.options)) {
+        const want = picked.find((x) => x && x.group === g.name);
+        const c = want ? g.choices.find((x) => x.label === want.label) : g.choices[0];
+        if (!c) throw new HttpError(400, `ជម្រើស "${g.name}" មិនត្រឹមត្រូវ`);
+        chosen.push({ group: g.name, label: c.label, price: c.price });
+      }
+      const unit = Math.round((finalPrice(p.price, p.discount) + chosen.reduce((n, c) => n + c.price, 0)) * 100) / 100;
+      insItem.run(seq, p.id, p.name, unit, qty, sugar, note, JSON.stringify(chosen));
       total += unit * qty;
     }
     total = Math.round(total * 100) / 100;
@@ -567,7 +604,7 @@ const admin = express.Router();
 admin.use(requireAdmin);
 // Roles: 'owner' can do everything; 'cashier' can only work with orders (view, status, payment)
 admin.use((req, res, next) => {
-  if (req.admin.role === 'owner' || req.path.startsWith('/orders')) return next();
+  if (req.admin.role === 'owner' || req.path.startsWith('/orders') || req.path === '/ordering' || req.path.startsWith('/shifts')) return next();
   next(new HttpError(403, 'មុខងារនេះសម្រាប់ម្ចាស់ហាងប៉ុណ្ណោះ'));
 });
 
@@ -579,8 +616,8 @@ admin.get('/products', (req, res) => {
 admin.post('/products', (req, res) => {
   const data = parseProduct(req.body);
   const id = 'prod-' + Date.now() + '-' + crypto.randomBytes(2).toString('hex');
-  db.prepare(`INSERT INTO products (id, name, category, price, discount, stock, status, description, image)
-              VALUES (@id, @name, @category, @price, @discount, @stock, @status, @description, @image)`).run({ id, ...data });
+  db.prepare(`INSERT INTO products (id, name, category, price, discount, stock, status, description, image, options)
+              VALUES (@id, @name, @category, @price, @discount, @stock, @status, @description, @image, @options)`).run({ id, ...data });
   audit(req, 'product_create', id, `${data.name} $${data.price} stock ${data.stock}`);
   res.status(201).json(productOut(db.prepare('SELECT * FROM products WHERE id = ?').get(id)));
 });
@@ -590,7 +627,7 @@ admin.put('/products/:id', (req, res) => {
   if (!existing) throw new HttpError(404, 'រកមិនឃើញទំនិញ');
   const data = parseProduct(req.body);
   db.prepare(`UPDATE products SET name=@name, category=@category, price=@price, discount=@discount, stock=@stock,
-              status=@status, description=@description, image=@image WHERE id=@id`).run({ id: req.params.id, ...data });
+              status=@status, description=@description, image=@image, options=@options WHERE id=@id`).run({ id: req.params.id, ...data });
   audit(req, 'product_update', req.params.id, `${existing.name}: $${existing.price}→$${data.price}, ស្តុក ${existing.stock}→${data.stock}, បញ្ចុះ ${existing.discount || 0}→${data.discount}%, ${existing.status}→${data.status}`);
   res.json(productOut(db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id)));
 });
@@ -952,6 +989,91 @@ admin.delete('/users/:id', (req, res) => {
   db.prepare('DELETE FROM admins WHERE id = ?').run(id);
   audit(req, 'user_delete', u.username);
   res.json({ ok: true });
+});
+
+// ---------------- Pause / resume customer ordering ----------------
+admin.put('/ordering', (req, res) => {
+  const paused = !!req.body.paused;
+  setSetting('ordering_paused', paused ? '1' : '0');
+  audit(req, 'ordering', paused ? 'paused' : 'open');
+  tgSend(paused ? '⏸️ ផ្អាកទទួលការកម្ម៉ង់ ដោយ ' + req.admin.username : '▶️ បើកទទួលការកម្ម៉ង់វិញ ដោយ ' + req.admin.username);
+  res.json({ orderingPaused: paused });
+});
+
+// ---------------- Cash drawer shifts (cashier + owner) ----------------
+const isoDt = (d) => d.replace(' ', 'T') + 'Z';
+const cash = (v) => { const n = Number(v ?? 0); if (!Number.isFinite(n) || n < 0 || n > 1e9) throw new HttpError(400, 'ចំនួនលុយមិនត្រឹមត្រូវ'); return n; };
+function shiftExpected(sh) {
+  // Cash sales in the shift. Assumes change is returned in the same currency that was received.
+  let usd = 0, khr = 0, n = 0;
+  for (const o of db.prepare("SELECT total, rate, received_cur FROM orders WHERE pay_method = 'cash' AND pay_status = 'paid' AND paid_at >= ? AND paid_at <= ?").all(sh.opened_at, sh.closed_at || '9999')) {
+    n++;
+    if (o.received_cur === 'KHR') khr += khrOf(o.total, o.rate > 0 ? o.rate : getRate()); else usd += o.total;
+  }
+  const r2 = (x) => Math.round(x * 100) / 100;
+  return { salesUsd: r2(usd), salesKhr: khr, orders: n, expUsd: r2(sh.open_usd + usd), expKhr: sh.open_khr + khr };
+}
+const shiftOut = (sh) => ({
+  id: sh.id, openedAt: isoDt(sh.opened_at), openedBy: sh.opened_by, openUsd: sh.open_usd, openKhr: sh.open_khr,
+  closedAt: sh.closed_at ? isoDt(sh.closed_at) : null, closedBy: sh.closed_by, countUsd: sh.count_usd, countKhr: sh.count_khr, note: sh.note,
+  ...(sh.closed_at ? { expUsd: sh.exp_usd, expKhr: sh.exp_khr } : shiftExpected(sh)),
+});
+const openShift = () => db.prepare('SELECT * FROM shifts WHERE closed_at IS NULL ORDER BY id DESC LIMIT 1').get();
+admin.get('/shifts/current', (req, res) => { const sh = openShift(); res.json(sh ? shiftOut(sh) : null); });
+admin.get('/shifts', (req, res) => res.json(db.prepare('SELECT * FROM shifts WHERE closed_at IS NOT NULL ORDER BY id DESC LIMIT 30').all().map(shiftOut)));
+admin.post('/shifts/open', (req, res) => {
+  if (openShift()) throw new HttpError(409, 'មានវេនកំពុងបើករួចហើយ');
+  const u = cash(req.body.openUsd), k = cash(req.body.openKhr);
+  const { lastInsertRowid: id } = db.prepare('INSERT INTO shifts (opened_by, open_usd, open_khr) VALUES (?, ?, ?)').run(req.admin.username, u, k);
+  audit(req, 'shift_open', '#' + id, `$${u} + ៛${k}`);
+  res.status(201).json(shiftOut(db.prepare('SELECT * FROM shifts WHERE id = ?').get(id)));
+});
+admin.post('/shifts/close', (req, res) => {
+  const sh = openShift();
+  if (!sh) throw new HttpError(409, 'មិនមានវេនកំពុងបើកទេ');
+  const cu = cash(req.body.countUsd), ck = cash(req.body.countKhr), note = String(req.body.note ?? '').trim().slice(0, 200);
+  const e = shiftExpected(sh);
+  db.prepare("UPDATE shifts SET closed_at = datetime('now'), closed_by = ?, count_usd = ?, count_khr = ?, exp_usd = ?, exp_khr = ?, note = ? WHERE id = ?")
+    .run(req.admin.username, cu, ck, e.expUsd, e.expKhr, note, sh.id);
+  const dU = Math.round((cu - e.expUsd) * 100) / 100, dK = ck - e.expKhr;
+  audit(req, 'shift_close', '#' + sh.id, `USD ${dU >= 0 ? '+' : ''}${dU}, KHR ${dK >= 0 ? '+' : ''}${dK}${note ? ' · ' + note : ''}`);
+  tgSend(`💵 បិទវេន #${sh.id} ដោយ ${req.admin.username}\nUSD: រំពឹង $${e.expUsd} រាប់បាន $${cu} (${dU === 0 ? 'ត្រូវ' : dU > 0 ? 'លើស $' + dU : 'ខ្វះ $' + (-dU)})\nKHR: រំពឹង ៛${e.expKhr} រាប់បាន ៛${ck} (${dK === 0 ? 'ត្រូវ' : dK > 0 ? 'លើស ៛' + dK : 'ខ្វះ ៛' + (-dK)})`);
+  res.json(shiftOut(db.prepare('SELECT * FROM shifts WHERE id = ?').get(sh.id)));
+});
+
+// ---------------- Restore from a backup file (owner only) ----------------
+const restoreUpload = multer({ dest: path.join(DATA_DIR, 'tmp'), limits: { fileSize: 200 * 1024 * 1024, files: 1 } });
+admin.post('/restore', restoreUpload.single('file'), (req, res) => {
+  if (!req.file) throw new HttpError(400, 'សូមជ្រើសរើសឯកសារ Backup (.db)');
+  const tmp = req.file.path;
+  try {
+    const head = Buffer.alloc(16), fd = fs.openSync(tmp, 'r');
+    fs.readSync(fd, head, 0, 16, 0); fs.closeSync(fd);
+    if (head.toString('latin1') !== 'SQLite format 3\0') throw new HttpError(400, 'ឯកសារនេះមិនមែនជា Backup ត្រឹមត្រូវទេ');
+    const restored = {};
+    db.exec(`ATTACH DATABASE '${tmp.replace(/'/g, "''")}' AS rs`);
+    try {
+      const have = new Set(db.prepare("SELECT name FROM rs.sqlite_master WHERE type = 'table'").all().map((r) => r.name));
+      for (const t of ['products', 'orders', 'order_items', 'admins']) if (!have.has(t)) throw new HttpError(400, `Backup មិនមានតារាង ${t}`);
+      if (db.prepare('PRAGMA rs.integrity_check').get().integrity_check !== 'ok') throw new HttpError(400, 'ឯកសារ Backup ខូច');
+      if (db.prepare('SELECT COUNT(*) AS n FROM rs.admins').get().n < 1) throw new HttpError(400, 'Backup មិនមានគណនី Admin');
+      makeBackup('prerestore'); // safety copy of what is being replaced
+      const tables = ['order_items', 'orders', 'products', 'banners', 'settings', 'admins'].filter((t) => have.has(t)); // children first
+      tx(() => {
+        for (const t of tables) db.exec(`DELETE FROM main.${t}`);
+        for (const t of [...tables].reverse()) {
+          const mc = db.prepare(`PRAGMA main.table_info(${t})`).all().map((c) => c.name);
+          const rc = new Set(db.prepare(`PRAGMA rs.table_info(${t})`).all().map((c) => c.name));
+          const cols = mc.filter((c) => rc.has(c)).map((c) => `"${c}"`).join(',');
+          db.exec(`INSERT INTO main.${t} (${cols}) SELECT ${cols} FROM rs.${t}`);
+          restored[t] = db.prepare(`SELECT COUNT(*) AS n FROM main.${t}`).get().n;
+        }
+      })();
+    } finally { try { db.exec('DETACH DATABASE rs'); } catch (_) { /* not attached */ } }
+    audit(req, 'restore', String(req.file.originalname).slice(0, 60), JSON.stringify(restored));
+    tgSend('♻️ ស្តារទិន្នន័យពី Backup ដោយ ' + req.admin.username + '\n' + JSON.stringify(restored));
+    res.json({ ok: true, restored });
+  } finally { fs.unlink(tmp, () => {}); }
 });
 
 admin.get('/audit', (req, res) => {
