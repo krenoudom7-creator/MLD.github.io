@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="km">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#0b0e14">
+<title>កាហ្វេ ម្លប់ដូង — លេខការកម្ម៉ង់</title>
+<link href="https://fonts.googleapis.com/css2?family=Kantumruy+Pro:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; font-family: 'Kantumruy Pro', system-ui, sans-serif; }
+  html, body { margin: 0; height: 100%; background: #0b0e14; color: #e2e8f0; overflow: hidden; }
+  header { display: flex; justify-content: space-between; align-items: center; padding: 1.2vh 3vw; border-bottom: 1px solid rgba(255,255,255,.08); }
+  .brand { color: #ffd700; font-weight: 700; font-size: clamp(1.1rem, 3vh, 2rem); }
+  .tools button { background: rgba(255,255,255,.07); color: #e2e8f0; border: 1px solid rgba(255,255,255,.15); border-radius: 999px; padding: .5vh 1.4vw; font-size: clamp(.8rem, 2vh, 1.1rem); cursor: pointer; margin-left: .6vw; }
+  main { display: grid; grid-template-columns: 1fr 1fr; height: calc(100% - 9vh); }
+  section { padding: 2vh 2.5vw; overflow: hidden; }
+  section + section { border-left: 1px solid rgba(255,255,255,.08); }
+  h2 { margin: 0 0 2vh; font-size: clamp(1.2rem, 4vh, 2.6rem); }
+  .prep h2 { color: #0dcaf0; } .ready h2 { color: #20c997; }
+  .nums { display: flex; flex-wrap: wrap; gap: 1.6vh 1.4vw; align-content: flex-start; }
+  .n { font-weight: 700; font-size: clamp(2rem, 9vh, 6rem); line-height: 1; padding: 1.2vh 1.6vw; border-radius: 16px; min-width: 20vw; text-align: center; letter-spacing: 2px; }
+  .prep .n { background: rgba(13,202,240,.12); border: 2px solid rgba(13,202,240,.4); color: #7ee6f7; }
+  .ready .n { background: rgba(32,201,151,.18); border: 2px solid #20c997; color: #5dfcc8; }
+  .ready .n.new { animation: flash 1s ease-in-out 6; }
+  @keyframes flash { 50% { background: #20c997; color: #0b0e14; transform: scale(1.07); } }
+  .empty { color: #64748b; font-size: clamp(1rem, 3vh, 1.8rem); }
+  #off { position: fixed; bottom: 1vh; left: 50%; transform: translateX(-50%); background: #b02a37; color: #fff; padding: .6vh 1.5vw; border-radius: 999px; display: none; }
+  @media (max-width: 700px) { main { grid-template-columns: 1fr; height: auto; overflow: auto; } html, body { overflow: auto; } .n { min-width: 40vw; font-size: 3rem; } }
+  @media (prefers-reduced-motion: reduce) { .ready .n.new { animation: none; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">☕ កាហ្វេ ម្លប់ដូង</div>
+  <div class="tools"><button id="snd">🔊 បើកសំឡេង</button><button id="fs">⛶ ពេញអេក្រង់</button></div>
+</header>
+<main>
+  <section class="prep"><h2>កំពុងរៀបចំ</h2><div class="nums" id="prep"></div></section>
+  <section class="ready"><h2>រួចរាល់ សូមមកទទួល</h2><div class="nums" id="ready"></div></section>
+</main>
+<div id="off">មិនអាចភ្ជាប់ Server បានទេ…</div>
+<script>
+  let ctx = null, soundOn = false, prevReady = null;
+  const $ = id => document.getElementById(id);
+  function tone(f, t, d) {
+    const o = ctx.createOscillator(), g = ctx.createGain(), s = ctx.currentTime + t;
+    o.type = 'triangle'; o.frequency.value = f;
+    g.gain.setValueAtTime(.0001, s); g.gain.exponentialRampToValueAtTime(.3, s + .02); g.gain.exponentialRampToValueAtTime(.0001, s + d);
+    o.connect(g); g.connect(ctx.destination); o.start(s); o.stop(s + d + .05);
+  }
+  function chime() { if (!soundOn || !ctx) return; [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => tone(f, i * .13, .4)); }
+  $('snd').onclick = () => {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!ctx && AC) ctx = new AC();
+    if (ctx && ctx.state === 'suspended') ctx.resume();
+    soundOn = !soundOn; $('snd').textContent = soundOn ? '🔊 សំឡេងបើក' : '🔇 សំឡេងបិទ'; if (soundOn) chime();
+  };
+  $('fs').onclick = () => { if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen && document.documentElement.requestFullscreen(); };
+  function draw(id, list, fresh) {
+    $(id).innerHTML = list.length ? list.map(n => `<div class="n${fresh && fresh.has(n) ? ' new' : ''}">${Number(n)}</div>`).join('') : '<div class="empty">—</div>';
+  }
+  async function tick() {
+    try {
+      const r = await fetch('/api/board', { cache: 'no-store' });
+      if (!r.ok) throw new Error('http ' + r.status);
+      const d = await r.json();
+      const fresh = prevReady ? new Set(d.ready.filter(n => !prevReady.has(n))) : null; // no chime on first load
+      draw('prep', d.preparing, null); draw('ready', d.ready, fresh);
+      if (fresh && fresh.size) chime();
+      prevReady = new Set(d.ready); $('off').style.display = 'none';
+    } catch (e) { $('off').style.display = 'block'; }
+  }
+  tick(); setInterval(tick, 4000);
+</script>
+</body>
+</html>
