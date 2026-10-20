@@ -911,6 +911,7 @@
                             <input type="text" id="kdsSearchInput" class="form-control bg-dark text-white border-secondary" placeholder="ស្វែងរកឈ្មោះ/តុ..." onkeyup="renderDashboard()">
                         </div>
 
+                        <a href="/board" target="_blank" class="btn btn-sm btn-outline-light" title="បើកផ្ទាំងលេខសម្រាប់ទូរទស្សន៍ក្នុងហាង"><i class="fa-solid fa-tv"></i></a>
                         <button id="btnPause" class="btn btn-sm btn-outline-danger" onclick="togglePause()" title="ផ្អាក/បើកការទទួលការកម្ម៉ង់ពីភ្ញៀវ"><i class="fa-solid fa-circle-pause me-1"></i><span id="btnPauseTxt">ផ្អាកទទួលកម្ម៉ង់</span></button>
                         <button id="btnSoundToggle" class="btn btn-sm btn-gold" onclick="toggleSound()" title="សំឡេងជូនដំណឹង"><i class="fa-solid fa-volume-high"></i></button>
 
@@ -1368,6 +1369,7 @@
                 <!-- Cart items list dynamically populated -->
             </div>
 
+            <div id="upsellBox" class="mb-3 d-none"></div>
             <div class="border-top border-secondary border-opacity-25 pt-3">
                 <div class="row g-2 mb-3">
                     <div class="col-7">
@@ -2100,6 +2102,32 @@
             try { await api('/api/admin/users/' + id, { method: 'DELETE', auth: true }); showToast('បានលុបអ្នកប្រើ!'); }
             catch (err) { alert(err.message); }
             loadAdminSettings();
+        }
+
+        // ---------- Smart upsell (in the cart drawer) ----------
+        let upsellSig = '#';
+        async function loadUpsell() {
+            const box = document.getElementById('upsellBox');
+            const ids = [...new Set(cart.map(i => i.id))];
+            const sig = ids.join(',');
+            if (sig === upsellSig) return;
+            upsellSig = sig;
+            if (!ids.length) { box.classList.add('d-none'); box.innerHTML = ''; return; }
+            try {
+                const list = (await api('/api/upsell?ids=' + encodeURIComponent(sig))).filter(u => products.some(p => p.id === u.id));
+                if (upsellSig !== sig) return; // a newer cart state is already being loaded
+                if (!list.length) { box.classList.add('d-none'); box.innerHTML = ''; return; }
+                box.innerHTML = `<div class="text-gold small fw-bold mb-1"><i class="fa-solid fa-wand-magic-sparkles me-1"></i>ទិញបន្ថែមជាមួយ?</div>` + list.map(u => `
+                    <div class="d-flex align-items-center gap-2 p-2 mb-1 rounded bg-dark bg-opacity-50 border border-secondary border-opacity-25">
+                        <img src="${esc(imgUrl(u.image))}" class="rounded-2" style="width:42px;height:42px;object-fit:cover;" alt="" onerror="this.style.visibility='hidden'">
+                        <div class="flex-grow-1" style="min-width:0;">
+                            <div class="small fw-bold text-truncate">${esc(u.name)}</div>
+                            <div class="small text-secondary">${u.pct !== null ? esc(u.pct) + '% នៃភ្ញៀវទិញជាមួយ' : 'ពេញនិយម'} · <span class="text-gold">$${Number(u.price).toFixed(2)}</span></div>
+                        </div>
+                        <button class="btn btn-sm btn-gold rounded-circle" style="width:34px;height:34px;" onclick="openSugarModalForProduct('${esc(u.id)}')" title="បន្ថែម"><i class="fa-solid fa-plus"></i></button>
+                    </div>`).join('');
+                box.classList.remove('d-none');
+            } catch (_) { box.classList.add('d-none'); box.innerHTML = ''; }
         }
 
         // ---------- Modifiers helpers ----------
@@ -3101,6 +3129,7 @@
                 lastCartCount = totalCount;
             }
             totalEl.innerHTML = '$' + totalPrice.toFixed(2) + `<small class="d-block text-secondary fs-6 fw-normal text-end">≈ ${fmtKhr(khr(totalPrice))}</small>`;
+            loadUpsell();
         }
 
         function changeCartQty(index, delta) {
