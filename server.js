@@ -144,6 +144,7 @@ for (const [col, ddl] of [
 db.exec('CREATE INDEX IF NOT EXISTS idx_orders_track ON orders(track_code)');
 if (!hasCol('products', 'options')) db.exec("ALTER TABLE products ADD COLUMN options TEXT NOT NULL DEFAULT '[]'");
 if (!hasCol('order_items', 'options')) db.exec("ALTER TABLE order_items ADD COLUMN options TEXT NOT NULL DEFAULT ''");
+if (!hasCol('orders', 'status_at')) db.exec('ALTER TABLE orders ADD COLUMN status_at TEXT'); // when the status last changed (queue board)
 db.exec(`CREATE TABLE IF NOT EXISTS shifts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   opened_at TEXT NOT NULL DEFAULT (datetime('now')), opened_by TEXT NOT NULL,
@@ -535,6 +536,48 @@ app.get('/api/orders/track/:code', trackLimiter, (req, res) => {
   });
 });
 
+// ---- Queue board (TV in the shop): order NUMBERS only, never names ----
+const boardLimiter = rateLimit({ windowMs: 60 * 1000, max: 60, standardHeaders: true, legacyHeaders: false, message: { error: 'សូមរង់ចាំបន្តិច' } });
+app.get('/api/board', boardLimiter, (req, res) => {
+  const rows = db.prepare(`SELECT seq, status FROM orders
+    WHERE (status IN ('pending','preparing') AND created_at >= datetime('now','-6 hours'))
+       OR (status = 'completed' AND COALESCE(status_at, created_at) >= datetime('now','-15 minutes')) ORDER BY seq`).all();
+  res.json({
+    preparing: rows.filter((r) => r.status !== 'completed').map((r) => 1000 + r.seq),
+    ready: rows.filter((r) => r.status === 'completed').map((r) => 1000 + r.seq),
+  });
+});
+
+// ---- Smart upsell: what customers actually bought together (no personal data used) ----
+app.get('/api/upsell', boardLimiter, (req, res) => {
+  const ids = String(req.query.ids || '').split(',').filter((x) => /^[\w-]{1,60}$/.test(x)).slice(0, 10);
+  if (!ids.length) return res.json([]);
+  const ph = ids.map(() => '?').join(',');
+  const seedTotal = db.prepare(`SELECT COUNT(DISTINCT oi.order_seq) AS n FROM order_items oi JOIN orders o ON o.seq = oi.order_seq
+    WHERE oi.product_id IN (${ph}) AND o.status != 'cancelled' AND o.created_at >= datetime('now','-90 days')`).get(...ids).n;
+  let rows, mode;
+  if (seedTotal >= 5) { // enough history: "bought together"
+    mode = 'together';
+    rows = db.prepare(`SELECT oi.product_id AS id, COUNT(DISTINCT oi.order_seq) AS n FROM order_items oi
+      WHERE oi.order_seq IN (SELECT oi2.order_seq FROM order_items oi2 JOIN orders o ON o.seq = oi2.order_seq
+        WHERE oi2.product_id IN (${ph}) AND o.status != 'cancelled' AND o.created_at >= datetime('now','-90 days'))
+      AND oi.product_id NOT IN (${ph}) GROUP BY oi.product_id HAVING n >= 2 ORDER BY n DESC LIMIT 8`).all(...ids, ...ids);
+  } else { // little history: honest fallback to best sellers, no percentages
+    mode = 'popular';
+    rows = db.prepare(`SELECT oi.product_id AS id, SUM(oi.quantity) AS n FROM order_items oi JOIN orders o ON o.seq = oi.order_seq
+      WHERE o.status != 'cancelled' AND o.created_at >= datetime('now','-30 days') AND oi.product_id NOT IN (${ph})
+      GROUP BY oi.product_id HAVING n >= 3 ORDER BY n DESC LIMIT 8`).all(...ids);
+  }
+  const get = db.prepare("SELECT * FROM products WHERE id = ? AND status = 'active' AND stock > 0");
+  const out = [];
+  for (const r of rows) {
+    const p = get.get(r.id);
+    if (p) out.push({ id: p.id, name: p.name, price: finalPrice(p.price, p.discount), image: p.image, mode, pct: mode === 'together' ? Math.round((r.n / seedTotal) * 100) : null });
+    if (out.length === 3) break;
+  }
+  res.json(out);
+});
+
 // Active promo banners for the POS home screen
 app.get('/api/banners', (req, res) => {
   const rows = db.prepare(`SELECT * FROM banners WHERE status = 'active' ORDER BY sort_order, id`).all();
@@ -782,7 +825,7 @@ admin.patch('/orders/:id/status', (req, res) => {
       db.prepare("UPDATE orders SET pay_status = 'refunded' WHERE seq = ? AND pay_status = 'paid'").run(seq);
     }
     prev = o.status;
-    db.prepare('UPDATE orders SET status = ? WHERE seq = ?').run(status, seq);
+    db.prepare("UPDATE orders SET status = ?, status_at = datetime('now') WHERE seq = ?").run(status, seq);
   })();
   if (prev) {
     audit(req, 'order_status', req.params.id, `${prev} → ${status}${reason ? ': ' + reason : ''}`);
@@ -1091,6 +1134,7 @@ app.use('/api/admin', admin);
 
 // ---------------- Static ----------------
 app.use('/uploads', express.static(UPLOAD_DIR, { maxAge: '7d', setHeaders: (res) => res.setHeader('X-Content-Type-Options', 'nosniff') }));
+app.get('/board', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'board.html')));
 app.use(express.static(PUBLIC_DIR));
 
 app.use('/api', (req, res) => res.status(404).json({ error: 'រកមិនឃើញ API នេះទេ' }));
