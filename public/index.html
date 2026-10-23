@@ -487,6 +487,12 @@
             </div>
         </div>
 
+        <!-- Menu sections: drinks / food -->
+        <div id="sectionTabs" class="d-flex gap-2 mb-3">
+            <button id="secDrinks" class="btn btn-gold rounded-pill px-4 py-2 fw-bold flex-fill flex-md-grow-0" onclick="setPosSection('drinks')"><i class="fa-solid fa-mug-hot me-2"></i>ភេសជ្ជៈ</button>
+            <button id="secFood" class="btn btn-outline-gold rounded-pill px-4 py-2 fw-bold flex-fill flex-md-grow-0" onclick="setPosSection('food')"><i class="fa-solid fa-utensils me-2"></i>ម្ហូបអាហារ</button>
+        </div>
+
         <!-- Category & Search Bar -->
         <div class="glass-card p-3 mb-4 d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
             <div>
@@ -495,13 +501,7 @@
             </div>
             
             <div class="d-flex flex-wrap align-items-center gap-2">
-                <div class="d-flex flex-wrap gap-2" id="categoryFilters">
-                    <button class="btn category-btn active" onclick="filterCategory('all', this)">ទាំងអស់</button>
-                    <button class="btn category-btn" onclick="filterCategory('coffee', this)"><i class="fa-solid fa-mug-hot me-1"></i> កាហ្វេ</button>
-                    <button class="btn category-btn" onclick="filterCategory('tea', this)"><i class="fa-solid fa-leaf me-1"></i> តែ & ឡាតេ</button>
-                    <button class="btn category-btn" onclick="filterCategory('drink', this)"><i class="fa-solid fa-wine-glass me-1"></i> ភេសជ្ជៈ</button>
-                    <button class="btn category-btn" onclick="filterCategory('bakery', this)"><i class="fa-solid fa-bread-slice me-1"></i> នំ & អាហារ</button>
-                </div>
+                <div class="d-flex flex-wrap gap-2" id="categoryFilters"></div>
                 
                 <div class="input-group input-group-sm ms-md-2" style="max-width: 220px;">
                     <span class="input-group-text bg-dark border-secondary text-secondary"><i class="fa-solid fa-magnifying-glass"></i></span>
@@ -650,7 +650,8 @@
                             <option value="coffee">កាហ្វេ (Coffee)</option>
                             <option value="tea">តែ (Tea)</option>
                             <option value="drink">ភេសជ្ជៈ (Drink)</option>
-                            <option value="bakery">នំ & អាហារ (Bakery/Food)</option>
+                            <option value="bakery">នំ (Bakery)</option>
+                            <option value="food">ម្ហូបអាហារ (Food)</option>
                         </select>
 
                         <select id="adminStatusFilter" class="form-select form-select-sm bg-dark text-white border-secondary" style="width: auto;" onchange="renderAdminTable()">
@@ -978,7 +979,8 @@
                                     <option value="coffee">កាហ្វេ (Coffee)</option>
                                     <option value="tea">តែ & ឡាតេ (Tea)</option>
                                     <option value="drink">ភេសជ្ជៈផ្សេងៗ (Drink)</option>
-                                    <option value="bakery">នំ & អាហារ (Bakery)</option>
+                                    <option value="bakery">នំ (Bakery)</option>
+                                    <option value="food">ម្ហូបអាហារ (Food)</option>
                                 </select>
                             </div>
                         </div>
@@ -1294,7 +1296,7 @@
         <div class="modal-dialog modal-dialog-centered">
             <div class="modal-content glass-card border-0 text-white" style="background: rgba(20, 22, 32, 0.98);">
                 <div class="modal-header border-bottom border-secondary border-opacity-25">
-                    <h5 class="modal-title fw-bold text-gold"><i class="fa-solid fa-sliders me-2"></i>ជ្រើសរើសកម្រិតស្ករ</h5>
+                    <h5 class="modal-title fw-bold text-gold"><i class="fa-solid fa-sliders me-2"></i><span id="sugarModalTitle">ជ្រើសរើសកម្រិតស្ករ</span></h5>
                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body py-3">
@@ -1307,6 +1309,7 @@
                     </div>
 
                     <div id="modalOptions" class="mb-3"></div>
+                    <div id="sugarBlock">
                     <label class="form-label text-gold mb-2 fw-bold"><i class="fa-solid fa-cubes-stacked me-2"></i>កម្រិតស្ករ (Sugar Level)</label>
                     
                     <div class="d-grid gap-2">
@@ -1339,6 +1342,7 @@
                             <span>100% (ស្ករពេញ / Extra Sweet)</span>
                             <i class="fa-solid fa-cubes text-gold"></i>
                         </label>
+                    </div>
                     </div>
                     <div class="mt-3">
                         <label for="itemNote" class="form-label text-gold mb-2 fw-bold"><i class="fa-solid fa-pen-to-square me-2"></i>កំណត់ចំណាំ (Note) <span class="text-secondary fw-normal small">- មិនចាំបាច់</span></label>
@@ -2130,6 +2134,28 @@
             } catch (_) { box.classList.add('d-none'); box.innerHTML = ''; }
         }
 
+        // ---------- Menu sections: drinks / food ----------
+        const FOOD_CATS = ['bakery', 'food'];
+        const isFood = (p) => !!p && FOOD_CATS.includes(p.category);
+        const sectionOf = (p) => isFood(p) ? 'food' : 'drinks';
+        let currentPosSection = 'drinks';
+        const SECTION_CHIPS = {
+            drinks: [['all', 'ទាំងអស់'], ['coffee', '<i class="fa-solid fa-mug-hot me-1"></i> កាហ្វេ'], ['tea', '<i class="fa-solid fa-leaf me-1"></i> តែ & ឡាតេ'], ['drink', '<i class="fa-solid fa-wine-glass me-1"></i> ភេសជ្ជៈ']],
+            food: [['all', 'ទាំងអស់'], ['bakery', '<i class="fa-solid fa-bread-slice me-1"></i> នំ'], ['food', '<i class="fa-solid fa-utensils me-1"></i> ម្ហូបអាហារ']],
+        };
+        function renderCategoryChips() {
+            document.getElementById('categoryFilters').innerHTML = SECTION_CHIPS[currentPosSection]
+                .map(([k, label]) => `<button class="btn category-btn ${currentPosCategory === k ? 'active' : ''}" onclick="filterCategory('${k}', this)">${label}</button>`).join('');
+        }
+        function setPosSection(sec) {
+            currentPosSection = sec;
+            currentPosCategory = 'all';
+            document.getElementById('secDrinks').className = 'btn rounded-pill px-4 py-2 fw-bold flex-fill flex-md-grow-0 ' + (sec === 'drinks' ? 'btn-gold' : 'btn-outline-gold');
+            document.getElementById('secFood').className = 'btn rounded-pill px-4 py-2 fw-bold flex-fill flex-md-grow-0 ' + (sec === 'food' ? 'btn-gold' : 'btn-outline-gold');
+            renderCategoryChips();
+            renderPosProducts();
+        }
+
         // ---------- Modifiers helpers ----------
         const optsText = (i) => (i.options || []).map(o => o.label).join(' · ');
         const optsHtml = (i) => (i.options || []).length ? `<div class="small text-info ps-2" style="word-break:break-word">${esc(optsText(i))}</div>` : '';
@@ -2186,15 +2212,17 @@
             const o = orders.find(x => x.id === orderId);
             if (!o) return;
             const t = new Date(o.createdAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+            const line = i => `<div class="rc-item"><div class="rc-name" style="font-size:15px;">${i.quantity} × ${esc(i.name)}</div>
+                ${[i.sugar && 'ស្ករ ' + esc(i.sugar), optsText(i) && esc(optsText(i))].filter(Boolean).length ? `<div class="rc-meta">${[i.sugar && 'ស្ករ ' + esc(i.sugar), optsText(i) && esc(optsText(i))].filter(Boolean).join(' · ')}</div>` : ''}
+                ${i.note ? `<div style="font-weight:700;">📝 ${esc(i.note)}</div>` : ''}</div>`;
+            const group = (title, list) => list.length ? `<div style="font-weight:700;margin-top:6px;">${title}</div>${list.map(line).join('')}<hr class="rc-sep">` : '';
             document.getElementById('printArea').innerHTML = `
-                <div style="text-align:center;font-weight:700;font-size:16px;">🍵 ជាងធ្វើភេសជ្ជៈ</div>
+                <div style="text-align:center;font-weight:700;font-size:16px;">ក្រដាសកម្ម៉ង់</div>
                 <hr class="rc-sep">
                 <div class="rc-row"><b style="font-size:18px;">${esc(o.tableNo)}</b><span>${esc(o.id)} · ${t}</span></div>
                 <div>${esc(o.customerName)}</div>
                 <hr class="rc-sep">
-                ${o.items.map(i => `<div class="rc-item"><div class="rc-name" style="font-size:15px;">${i.quantity} × ${esc(i.name)}</div>
-                    <div class="rc-meta">ស្ករ ${esc(i.sugar)}${optsText(i) ? ' · ' + esc(optsText(i)) : ''}</div>
-                    ${i.note ? `<div style="font-weight:700;">📝 ${esc(i.note)}</div>` : ''}</div>`).join('')}`;
+                ${group('🍵 ភេសជ្ជៈ', o.items.filter(i => i.kind !== 'food'))}${group('🍽️ ម្ហូបអាហារ', o.items.filter(i => i.kind === 'food'))}`;
             window.print();
         }
 
@@ -2453,6 +2481,7 @@
 
             // Load data from Backend (orders only load when admin is logged in)
             await Promise.all([loadProductsFromDb(), refreshOrders(), loadBanners(), loadSettings()]);
+            renderCategoryChips();
             renderPosProducts();
             renderCart();
             renderDashboard();
@@ -2760,7 +2789,8 @@
                 case 'coffee': return 'កាហ្វេ';
                 case 'tea': return 'តែ & ឡាតេ';
                 case 'drink': return 'ភេសជ្ជៈ';
-                case 'bakery': return 'នំ & អាហារ';
+                case 'bakery': return 'នំ';
+                case 'food': return 'ម្ហូបអាហារ';
                 default: return cat;
             }
         }
@@ -2970,7 +3000,7 @@
 
             // Filter active products for POS view
             const filtered = products.filter(p => {
-                const isCat = (currentPosCategory === 'all') || (p.category === currentPosCategory);
+                const isCat = search ? true : ((sectionOf(p) === currentPosSection) && (currentPosCategory === 'all' || p.category === currentPosCategory));
                 const isSearch = p.name.toLowerCase().includes(search);
                 const isActive = p.status === 'active';
                 return isCat && isSearch && isActive;
@@ -3024,13 +3054,17 @@
             document.getElementById('itemNote').value = '';
             document.getElementById('itemNoteCount').textContent = '0';
             renderModalOptions(selectedProductForSugar);
+            const foodItem = isFood(selectedProductForSugar);
+            document.getElementById('sugarBlock').classList.toggle('d-none', foodItem);
+            document.getElementById('sugarModalTitle').textContent = foodItem ? 'កំណត់ចំណាំម្ហូបអាហារ' : 'ជ្រើសរើសកម្រិតស្ករ';
+            document.getElementById('itemNote').placeholder = foodItem ? 'ឧ. មិនហឹរ, ដាក់ស៊ុតបន្ថែម, ខ្ចប់ទៅ…' : 'ឧ. ទឹកកកតិច, ដាក់ទឹកដោះគោបន្ថែម, កែវតូច…';
 
             sugarModalInstance.show();
         }
 
         document.getElementById('confirmAddToCartBtn').addEventListener('click', () => {
             if (!selectedProductForSugar) return;
-            const selectedSugar = document.querySelector('input[name="sugarLevel"]:checked').value;
+            const selectedSugar = isFood(selectedProductForSugar) ? '' : document.querySelector('input[name="sugarLevel"]:checked').value;
 
             const note = document.getElementById('itemNote').value.replace(/\s+/g, ' ').trim().slice(0, 100);
             const chosen = (selectedProductForSugar.options || []).map((g, gi) => {
@@ -3106,7 +3140,7 @@
                                     <span class="fw-bold text-white small text-truncate" style="max-width: 140px;">${esc(item.name)}</span>
                                     <button class="btn btn-sm text-danger p-0 ms-1" onclick="removeCartItem(${index})"><i class="fa-solid fa-xmark"></i></button>
                                 </div>
-                                <div class="my-1"><span class="sugar-badge">ស្ករ ${esc(item.sugar)}</span></div>
+                                ${item.sugar ? `<div class="my-1"><span class="sugar-badge">ស្ករ ${esc(item.sugar)}</span></div>` : ''}
                                 ${optsHtml(item)}
                                 ${item.note ? `<div class="small text-warning" style="word-break:break-word"><i class="fa-regular fa-note-sticky me-1"></i>${esc(item.note)}</div>` : ''}
                                 <div class="d-flex justify-content-between align-items-center">
@@ -3255,10 +3289,10 @@
                 const itemsList = o.items.map(i => `
                     <div class="d-flex justify-content-between align-items-center mb-1">
                         <div>
-                            <span class="fw-bold text-white small">${esc(i.name)}</span>
+                            <span class="fw-bold text-white small">${esc(i.name)}</span>${i.kind === 'food' ? ' <span class="badge bg-warning text-dark">🍽️ ម្ហូប</span>' : ''}
                             <span class="text-gold fw-bold small">x${i.quantity}</span>
                         </div>
-                        <span class="sugar-badge">ស្ករ ${esc(i.sugar)}</span>
+                        ${i.sugar ? `<span class=\"sugar-badge\">ស្ករ ${esc(i.sugar)}</span>` : ''}
                     </div>
                     ${optsHtml(i)}${i.note ? `<div class="small text-warning mb-2 ps-2" style="word-break:break-word">📝 ${esc(i.note)}</div>` : ''}
                 `).join('');
@@ -3315,7 +3349,7 @@
 
             tbody.innerHTML = items.map(o => {
                 const itemsList = o.items.map(i => `
-                    <div>• ${esc(i.name)} <strong class="text-gold">x${i.quantity}</strong> <span class="sugar-badge ms-1">ស្ករ ${esc(i.sugar)}</span>${optsHtml(i)}${i.note ? `<div class="small text-warning ps-3">📝 ${esc(i.note)}</div>` : ''}</div>
+                    <div>• ${esc(i.name)}${i.kind === 'food' ? ' 🍽️' : ''} <strong class="text-gold">x${i.quantity}</strong> ${i.sugar ? `<span class="sugar-badge ms-1">ស្ករ ${esc(i.sugar)}</span>` : ''}${optsHtml(i)}${i.note ? `<div class="small text-warning ps-3">📝 ${esc(i.note)}</div>` : ''}</div>
                 `).join('');
 
                 return `
