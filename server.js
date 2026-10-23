@@ -45,7 +45,8 @@ const TZ_MOD = `${TZ_HOURS >= 0 ? '+' : '-'}${Math.abs(TZ_HOURS)} hours`;
 const BACKUP_DIR = path.join(DATA_DIR, 'backups');
 fs.mkdirSync(BACKUP_DIR, { recursive: true });
 
-const CATEGORIES = ['coffee', 'tea', 'drink', 'bakery'];
+const CATEGORIES = ['coffee', 'tea', 'drink', 'bakery', 'food'];
+const FOOD_CATS = ['bakery', 'food']; // food items have no sugar level, only a note
 const ORDER_STATUSES = ['pending', 'preparing', 'completed', 'cancelled'];
 
 // ---------------------------------------------------------------
@@ -145,6 +146,10 @@ db.exec('CREATE INDEX IF NOT EXISTS idx_orders_track ON orders(track_code)');
 if (!hasCol('products', 'options')) db.exec("ALTER TABLE products ADD COLUMN options TEXT NOT NULL DEFAULT '[]'");
 if (!hasCol('order_items', 'options')) db.exec("ALTER TABLE order_items ADD COLUMN options TEXT NOT NULL DEFAULT ''");
 if (!hasCol('orders', 'status_at')) db.exec('ALTER TABLE orders ADD COLUMN status_at TEXT'); // when the status last changed (queue board)
+if (!hasCol('order_items', 'kind')) { // 'drink' | 'food' snapshot, so old orders keep their meaning if a product changes category
+  db.exec("ALTER TABLE order_items ADD COLUMN kind TEXT NOT NULL DEFAULT 'drink'");
+  db.exec("UPDATE order_items SET kind = 'food' WHERE product_id IN (SELECT id FROM products WHERE category IN ('bakery','food'))");
+}
 db.exec(`CREATE TABLE IF NOT EXISTS shifts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   opened_at TEXT NOT NULL DEFAULT (datetime('now')), opened_by TEXT NOT NULL,
@@ -313,7 +318,7 @@ const productOut = (r) => ({
 function loadOrders(whereSql = '', params = []) {
   const rows = db.prepare(`SELECT * FROM orders ${whereSql} ORDER BY seq DESC`).all(...params);
   if (!rows.length) return [];
-  const itemsStmt = db.prepare('SELECT name, price, quantity, sugar, note, options FROM order_items WHERE order_seq = ? ORDER BY id');
+  const itemsStmt = db.prepare('SELECT name, price, quantity, sugar, note, options, kind FROM order_items WHERE order_seq = ? ORDER BY id');
   return rows.map((o) => ({
     id: 'ORD-' + (1000 + o.seq),
     customerName: o.customer_name,
@@ -605,7 +610,7 @@ app.post('/api/orders', orderLimiter, (req, res) => {
   const decStock = db.prepare('UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?');
   const trackCode = crypto.randomBytes(9).toString('base64url');
   const insOrder = db.prepare('INSERT INTO orders (customer_name, table_no, total, track_code, ip) VALUES (?, ?, 0, ?, ?)');
-  const insItem = db.prepare('INSERT INTO order_items (order_seq, product_id, name, price, quantity, sugar, note, options) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+  const insItem = db.prepare('INSERT INTO order_items (order_seq, product_id, name, price, quantity, sugar, note, options, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
   const setTotal = db.prepare('UPDATE orders SET total = ? WHERE seq = ?');
 
   const create = tx(() => {
@@ -617,7 +622,8 @@ app.post('/api/orders', orderLimiter, (req, res) => {
       const p = getProduct.get(String(it.id));
       if (!p || p.status !== 'active') throw new HttpError(409, `ទំនិញ "${it.name ?? it.id}" មិនមានលក់ទៀតទេ`);
       if (decStock.run(qty, p.id, qty).changes === 0) throw new HttpError(409, `ទំនិញ "${p.name}" អស់ស្តុក ឬមិនគ្រប់ចំនួន (នៅសល់ ${p.stock})`);
-      const sugar = String(it.sugar ?? '').slice(0, 20);
+      const food = FOOD_CATS.includes(p.category);
+      const sugar = food ? '' : String(it.sugar ?? '').slice(0, 20); // food never carries a sugar level
       const note = String(it.note ?? '').replace(/\s+/g, ' ').trim().slice(0, 100);
       // chosen options are re-validated against the product's own option groups; price delta comes from the server
       const picked = Array.isArray(it.options) ? it.options : [], chosen = [];
@@ -628,7 +634,7 @@ app.post('/api/orders', orderLimiter, (req, res) => {
         chosen.push({ group: g.name, label: c.label, price: c.price });
       }
       const unit = Math.round((finalPrice(p.price, p.discount) + chosen.reduce((n, c) => n + c.price, 0)) * 100) / 100;
-      insItem.run(seq, p.id, p.name, unit, qty, sugar, note, JSON.stringify(chosen));
+      insItem.run(seq, p.id, p.name, unit, qty, sugar, note, JSON.stringify(chosen), food ? 'food' : 'drink');
       total += unit * qty;
     }
     total = Math.round(total * 100) / 100;
