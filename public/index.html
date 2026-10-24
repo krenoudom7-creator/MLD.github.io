@@ -1032,7 +1032,12 @@
                         <div class="mb-3">
                             <label class="form-label text-gold small fw-bold">ជម្រើសបន្ថែម (Modifiers) <span class="text-secondary fw-normal">- មិនចាំបាច់</span></label>
                             <textarea class="form-control bg-dark text-white border-secondary" id="formOptions" rows="3" placeholder="មួយបន្ទាត់ ១ ក្រុម។ ឧ.&#10;ទំហំ: M=0, L=0.5&#10;Topping: គ្មាន=0, Pearl=0.75"></textarea>
-                            <small class="text-secondary">ទម្រង់៖ ឈ្មោះក្រុម: ជម្រើស=តម្លៃបន្ថែម($), ... ជម្រើសទី ១ ជាលំនាំដើម។ អតិបរមា ៥ ក្រុម។</small>
+                            <div class="d-flex flex-wrap gap-2 my-1">
+                                <button type="button" class="btn btn-sm btn-outline-gold rounded-pill" onclick="applyOptionTemplate('drink')"><i class="fa-solid fa-mug-hot me-1"></i> គំរូភេសជ្ជៈ (ទំហំ+ទឹកកក+ក្តៅ/ត្រជាក់)</button>
+                                <button type="button" class="btn btn-sm btn-outline-gold rounded-pill" onclick="applyOptionTemplate('food')"><i class="fa-solid fa-utensils me-1"></i> គំរូម្ហូប (ហិរ+សាច់+គ្រឿងបន្ថែម)</button>
+                                <button type="button" class="btn btn-sm btn-outline-secondary rounded-pill" onclick="applyOptionTemplate('clear')">សម្អាត</button>
+                            </div>
+                            <small class="text-secondary">ទម្រង់៖ ឈ្មោះក្រុម: ជម្រើស=តម្លៃបន្ថែម($), ... ជម្រើសទី ១ ជាលំនាំដើម (ជ្រើសបានមួយ)។ ដាក់ <b>+</b> នៅមុខឈ្មោះក្រុម (ឧ. +គ្រឿងបន្ថែម) បើអាចជ្រើសបានច្រើន ហើយគ្មានលំនាំដើម។ អតិបរមា ៥ ក្រុម។ ក្រោយគំរូ សូមកែតម្លៃឱ្យត្រូវនឹងហាងរបស់អ្នក។</small>
                         </div>
 
                         <!-- Image Source Selection & Upload -->
@@ -2160,7 +2165,7 @@
         const optsText = (i) => (i.options || []).map(o => o.label).join(' · ');
         const optsHtml = (i) => (i.options || []).length ? `<div class="small text-info ps-2" style="word-break:break-word">${esc(optsText(i))}</div>` : '';
         function optionsToText(groups) {
-            return (groups || []).map(g => `${g.name}: ${g.choices.map(c => `${c.label}=${c.price}`).join(', ')}`).join('\n');
+            return (groups || []).map(g => `${g.multi ? '+' : ''}${g.name}: ${g.choices.map(c => `${c.label}=${c.price}`).join(', ')}`).join('\n');
         }
         function parseOptionsText(text) {
             const groups = [];
@@ -2175,19 +2180,48 @@
                     return { label, price };
                 });
                 if (!choices.length) throw new Error('ក្រុមគ្មានជម្រើស៖ ' + line);
-                groups.push({ name: line.slice(0, k).trim(), choices });
+                let name = line.slice(0, k).trim(), multi = false;
+                if (name.startsWith('+')) { multi = true; name = name.slice(1).trim(); }
+                groups.push({ name, multi, choices });
             }
             return groups;
+        }
+
+        const OPTION_TEMPLATES = {
+            drink: 'ទំហំ: តូច (S)=0, កណ្ដាល (M)=0.5, ធំ (L)=1\nទឹកកក: ធម្មតា 100%=0, តិច 50%=0, អត់ទឹកកក=0\nប្រភេទ: ត្រជាក់ (Iced)=0, ក្តៅ (Hot)=0',
+            food: 'កម្រិតហិរ: មិនហិរ=0, ហិរតិច 🌶️=0, ហិរមធ្យម 🌶️🌶️=0, ហិរខ្លាំង 🌶️🌶️🌶️=0\nប្រភេទសាច់: សាច់មាន់=0, សាច់ជ្រូក=0, សាច់គោ=0.5, គ្រឿងសមុទ្រ=1\n+គ្រឿងបន្ថែម: ពងទាចៀន=0.5, បាយថែម=0.5, ប្រកិត=0.75, សាច់បន្ថែម=1.5',
+        };
+        function applyOptionTemplate(kind) {
+            const box = document.getElementById('formOptions');
+            if (box.value.trim() && kind !== 'clear' && !confirm('ជំនួសជម្រើសដែលមានស្រាប់ដោយគំរូ?')) return;
+            box.value = kind === 'clear' ? '' : OPTION_TEMPLATES[kind];
         }
         function renderModalOptions(p) {
             const box = document.getElementById('modalOptions');
             box.innerHTML = (p.options || []).map((g, gi) => `
-                <div class="mb-2"><div class="text-gold small fw-bold mb-1">${esc(g.name)}</div>
+                <div class="mb-2"><div class="text-gold small fw-bold mb-1">${esc(g.name)}${g.multi ? ' <span class="text-secondary fw-normal">(ជ្រើសបានច្រើន)</span>' : ''}</div>
                 <div class="d-flex flex-wrap gap-2">${g.choices.map((c, ci) => `
-                    <input type="radio" class="btn-check" name="opt_${gi}" id="opt_${gi}_${ci}" value="${ci}" ${ci === 0 ? 'checked' : ''}>
+                    <input type="${g.multi ? 'checkbox' : 'radio'}" class="btn-check" name="opt_${gi}" id="opt_${gi}_${ci}" value="${ci}" ${(!g.multi && ci === 0) ? 'checked' : ''}>
                     <label class="btn btn-outline-light btn-sm rounded-pill btn-sugar-option" for="opt_${gi}_${ci}">${esc(c.label)}${c.price ? ` <span class="text-gold">+$${c.price.toFixed(2)}</span>` : ''}</label>`).join('')}
                 </div></div>`).join('');
+            updateModalPrice();
         }
+        function currentChosenOptions(p) {
+            return (p.options || []).flatMap((g, gi) => {
+                const picked = [...document.querySelectorAll(`input[name="opt_${gi}"]:checked`)].map(el => g.choices[Number(el.value)]).filter(Boolean);
+                const list = g.multi ? picked : [picked[0] || g.choices[0]];
+                return list.map(c => ({ group: g.name, label: c.label, price: c.price }));
+            });
+        }
+        function updateModalPrice() {
+            const p = selectedProductForSugar;
+            if (!p) return;
+            const delta = currentChosenOptions(p).reduce((n, o) => n + o.price, 0);
+            document.getElementById('modalItemPrice').innerHTML = delta > 0
+                ? `<span class="text-gold">$${(finalPrice(p) + delta).toFixed(2)}</span> <small class="text-secondary">(+$${delta.toFixed(2)})</small>`
+                : priceHtml(p, 'fs-6');
+        }
+        document.getElementById('modalOptions').addEventListener('change', updateModalPrice);
 
         // ---------- Pause ordering / sold-out / kitchen ticket ----------
         function applyPauseUi() {
@@ -3067,12 +3101,8 @@
             const selectedSugar = isFood(selectedProductForSugar) ? '' : document.querySelector('input[name="sugarLevel"]:checked').value;
 
             const note = document.getElementById('itemNote').value.replace(/\s+/g, ' ').trim().slice(0, 100);
-            const chosen = (selectedProductForSugar.options || []).map((g, gi) => {
-                const el = document.querySelector(`input[name="opt_${gi}"]:checked`);
-                const c = g.choices[el ? Number(el.value) : 0] || g.choices[0];
-                return { group: g.name, label: c.label, price: c.price };
-            });
-            const optKey = chosen.map(o => o.label).join('|');
+            const chosen = currentChosenOptions(selectedProductForSugar);
+            const optKey = chosen.map(o => o.group + ':' + o.label).join('|');
             const optDelta = chosen.reduce((n, o) => n + o.price, 0);
             const existingIndex = cart.findIndex(i => i.id === selectedProductForSugar.id && i.sugar === selectedSugar && (i.note || '') === note && (i.optKey || '') === optKey);
             
