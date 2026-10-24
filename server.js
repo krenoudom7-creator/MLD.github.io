@@ -376,7 +376,7 @@ function parseOptions(v) {
     const name = String((g && g.name) ?? '').trim().slice(0, 30);
     const ch = g && Array.isArray(g.choices) ? g.choices : [];
     if (!name || ch.length < 1 || ch.length > 8) throw new HttpError(400, `ក្រុមជម្រើស "${name}" ត្រូវមាន 1-8 ជម្រើស`);
-    return { name, choices: ch.map((c) => {
+    return { name, multi: !!(g && g.multi), choices: ch.map((c) => {
       const label = String((c && c.label) ?? '').trim().slice(0, 30), price = Math.round(Number((c && c.price) ?? 0) * 100) / 100;
       if (!label || !Number.isFinite(price) || price < 0 || price > 50) throw new HttpError(400, `ជម្រើស "${label}" មិនត្រឹមត្រូវ`);
       return { label, price };
@@ -628,6 +628,17 @@ app.post('/api/orders', orderLimiter, (req, res) => {
       // chosen options are re-validated against the product's own option groups; price delta comes from the server
       const picked = Array.isArray(it.options) ? it.options : [], chosen = [];
       for (const g of safeParse(p.options)) {
+        if (g.multi) { // add-ons: zero or more, each validated against the product's own list, no duplicates
+          const seen = new Set();
+          for (const w of picked.filter((x) => x && x.group === g.name)) {
+            const c = g.choices.find((x) => x.label === w.label);
+            if (!c) throw new HttpError(400, `ជម្រើស "${g.name}" មិនត្រឹមត្រូវ`);
+            if (seen.has(c.label)) continue;
+            seen.add(c.label);
+            chosen.push({ group: g.name, label: c.label, price: c.price });
+          }
+          continue;
+        }
         const want = picked.find((x) => x && x.group === g.name);
         const c = want ? g.choices.find((x) => x.label === want.label) : g.choices[0];
         if (!c) throw new HttpError(400, `ជម្រើស "${g.name}" មិនត្រឹមត្រូវ`);
