@@ -449,6 +449,261 @@
             } catch (err) { alert(err.message); }
         }
         function showToast(msg) { document.getElementById('toastMsg').textContent = msg; new bootstrap.Toast(document.getElementById('orderToast')).show(); }
+        // ============================================================================
+// REAL-TIME DYNAMIC KHQR CHECKOUT & VERIFICATION CONTROLLER
+// ============================================================================
+let khqrModalInstance = null;
+let currentKhqrTrackCode = null;
+let currentKhqrState = null;
+let khqrPollTimer = null;
+let khqrCountdownTimer = null;
+
+function openDynamicKhqrModal(trackCode, initialKhqrData = null) {
+    if (!khqrModalInstance) khqrModalInstance = new bootstrap.Modal(document.getElementById('khqrCheckoutModal'));
+    currentKhqrTrackCode = trackCode;
+    if (initialKhqrData) renderKhqrModalState(initialKhqrData);
+    khqrModalInstance.show();
+    startKhqrPolling();
+}
+
+function startKhqrPolling() {
+    stopKhqrPolling();
+    pollCurrentKhqrNow();
+    khqrPollTimer = setInterval(pollCurrentKhqrNow, 3000);
+    khqrCountdownTimer = setInterval(updateKhqrCountdownUi, 1000);
+}
+
+function stopKhqrPolling() {
+    if (khqrPollTimer) { clearInterval(khqrPollTimer); khqrPollTimer = null; }
+    if (khqrCountdownTimer) { clearInterval(khqrCountdownTimer); khqrCountdownTimer = null; }
+}
+
+async function pollCurrentKhqrNow() {
+    if (!currentKhqrTrackCode) return;
+    try {
+        const data = await api('/api/payments/khqr/' + encodeURIComponent(currentKhqrTrackCode));
+        if (data) renderKhqrModalState(data);
+    } catch (_) {}
+}
+
+async function switchKhqrCurrency(cur) {
+    if (!currentKhqrTrackCode) return;
+    if (currentKhqrState && currentKhqrState.status === 'paid') return;
+    try {
+        const data = await api('/api/payments/khqr/' + encodeURIComponent(currentKhqrTrackCode) + '/regenerate', {
+            method: 'POST', body: { currency: cur }
+        });
+        renderKhqrModalState(data);
+        startKhqrPolling();
+    } catch (err) { alert(err.message); }
+}
+
+async function regenerateCurrentKhqr() {
+    const cur = (currentKhqrState && currentKhqrState.currency) || 'USD';
+    await switchKhqrCurrency(cur);
+}
+
+function renderKhqrModalState(d) {
+    currentKhqrState = d;
+    document.getElementById('khqrOrderId').textContent = d.orderId;
+    document.getElementById('khqrPaymentRef').textContent = d.paymentRef;
+    document.getElementById('khqrMerchantName').textContent = d.merchantName || 'MLOB DOUNG COFFEE';
+    document.getElementById('khqrEnvBadge').classList.toggle('d-none', d.environment !== 'sandbox');
+
+    document.getElementById('btnKhqrUsd').className = 'btn btn-sm fw-bold px-3 ' + (d.currency === 'USD' ? 'btn-gold' : 'btn-outline-gold');
+    document.getElementById('btnKhqrKhr').className = 'btn btn-sm fw-bold px-3 ' + (d.currency === 'KHR' ? 'btn-gold' : 'btn-outline-gold');
+
+    const amtTxt = d.currency === 'KHR'
+        ? fmtKhr(d.expectedAmount) + ` ($${Number(d.expectedUsd).toFixed(2)})`
+        : `$${Number(d.expectedAmount).toFixed(2)} (${fmtKhr(khr(d.expectedUsd))})`;
+    document.getElementById('khqrAmountDisplay').textContent = amtTxt;
+
+    const qrImg = document.getElementById('khqrQrImg');
+    const overlay = document.getElementById('khqrOverlayStatus');
+    const statusMsg = document.getElementById('khqrStatusMessage');
+    const btnRegen = document.getElementById('btnRegenerateKhqr');
+    const btnCheck = document.getElementById('btnCheckKhqrNow');
+    const curToggle = document.getElementById('khqrCurrencyToggle');
+
+    if (d.status === 'pending') {
+        if (d.qrDataUrl) qrImg.src = d.qrDataUrl;
+        overlay.classList.add('d-none');
+        overlay.classList.remove('d-flex');
+        btnRegen.classList.add('d-none');
+        btnCheck.classList.remove('d-none');
+        curToggle.classList.remove('d-none');
+        statusMsg.innerHTML = `<div class="badge bg-warning text-dark px-3 py-2 fs-6"><i class="fa-solid fa-spinner fa-spin me-2"></i>កំពុងរង់ចាំការស្កេនបង់ប្រាក់...</div>
+            <div class="small text-secondary mt-2">បើកកម្មវិធីធនាគារ (ABA, ACLEDA, Wing, Bakong) រួចស្កេន QR ខាងលើ។ ប្រព័ន្ធនឹងផ្ទៀងផ្ទាត់ដោយស្វ័យប្រវត្តិ។</div>`;
+    } else if (d.status === 'paid') {
+        stopKhqrPolling();
+        overlay.classList.remove('d-none');
+        overlay.classList.add('d-flex');
+        overlay.innerHTML = `<i class="fa-solid fa-circle-check text-success fa-4x mb-2"></i>
+            <div class="fw-bold fs-5 text-success">បានបង់ប្រាក់ជោគជ័យ!</div>
+            <div class="small text-secondary mt-1">Bakong Hash: ${esc(d.bakongHash || 'Verified')}</div>`;
+        btnRegen.classList.add('d-none');
+        btnCheck.classList.add('d-none');
+        curToggle.classList.add('d-none');
+        statusMsg.innerHTML = `<div class="alert alert-success py-2 mb-0 fw-bold"><i class="fa-solid fa-check-double me-1"></i>ការបង់ប្រាក់ត្រូវបានផ្ទៀងផ្ទាត់ដោយជោគជ័យ! ហាងកំពុងរៀបចំការកម្ម៉ង់របស់អ្នក។</div>`;
+        playReadySound();
+        refreshTracking();
+    } else if (d.status === 'expired') {
+        stopKhqrPolling();
+        overlay.classList.remove('d-none');
+        overlay.classList.add('d-flex');
+        overlay.innerHTML = `<i class="fa-solid fa-clock-rotate-left text-warning fa-3x mb-2"></i>
+            <div class="fw-bold text-warning">QR Code ផុតកំណត់</div>`;
+        btnRegen.classList.remove('d-none');
+        btnCheck.classList.add('d-none');
+        curToggle.classList.remove('d-none');
+        statusMsg.innerHTML = `<div class="alert alert-warning py-2 mb-0 small">កូដ QR នេះបានផុតកំណត់ហើយ។ សូមចុច <b>"បង្កើត QR ថ្មី"</b> ដើម្បីបន្តការបង់ប្រាក់។</div>`;
+        document.getElementById('khqrCountdownDisplay').textContent = '';
+    } else if (d.status === 'failed') {
+        stopKhqrPolling();
+        overlay.classList.remove('d-none');
+        overlay.classList.add('d-flex');
+        overlay.innerHTML = `<i class="fa-solid fa-triangle-exclamation text-danger fa-3x mb-2"></i>
+            <div class="fw-bold text-danger">ការផ្ទៀងផ្ទាត់បរាជ័យ</div>`;
+        btnRegen.classList.remove('d-none');
+        btnCheck.classList.add('d-none');
+        statusMsg.innerHTML = `<div class="alert alert-danger py-2 mb-0 small">${esc(d.failReason || 'ការបង់ប្រាក់មិនត្រឹមត្រូវ')}</div>`;
+        document.getElementById('khqrCountdownDisplay').textContent = '';
+    }
+    updateKhqrCountdownUi();
+}
+
+function updateKhqrCountdownUi() {
+    const el = document.getElementById('khqrCountdownDisplay');
+    if (!currentKhqrState || currentKhqrState.status !== 'pending') { el.textContent = ''; return; }
+    const remSec = Math.max(0, Math.floor((Date.parse(currentKhqrState.expiresAt) - Date.now()) / 1000));
+    const m = String(Math.floor(remSec / 60)).padStart(2, '0');
+    const s = String(remSec % 60).padStart(2, '0');
+    el.innerHTML = `<i class="fa-regular fa-clock me-1 text-gold"></i>ផុតកំណត់ក្នុងរយៈពេល: <b class="text-white">${m}:${s}</b>`;
+    if (remSec <= 0) pollCurrentKhqrNow();
+}
+
+// Override checkoutCartAndSendToKds to launch Dynamic KHQR immediately
+async function checkoutCartAndSendToKds() {
+    if (cart.length === 0) {
+        alert('សូមបន្ថែមទំនិញចូលកន្ត្រកជាមុនសិន!');
+        return;
+    }
+    const customerName = document.getElementById('cartCustomerName').value.trim();
+    const tableNo = document.getElementById('cartTableNo').value.trim();
+
+    let newOrder;
+    try {
+        const res = await api('/api/orders', { method: 'POST', body: {
+            customerName, tableNo, currency: 'USD',
+            items: cart.map(i => ({ id: i.id, name: i.name, quantity: i.quantity, sugar: i.sugar, note: i.note || '', options: (i.options || []).map(o => ({ group: o.group, label: o.label })) }))
+        }});
+        newOrder = mapOrder(res);
+        addMyOrder(newOrder);
+    } catch (err) {
+        alert(err.message);
+        await loadProductsFromDb();
+        renderPosProducts();
+        renderCart();
+        return;
+    }
+
+    cart = [];
+    document.getElementById('cartCustomerName').value = '';
+    document.getElementById('cartTableNo').value = '';
+    renderCart();
+
+    const offcanvasEl = document.getElementById('cartOffcanvas');
+    const bsOffcanvas = bootstrap.Offcanvas.getInstance(offcanvasEl);
+    if (bsOffcanvas) bsOffcanvas.hide();
+
+    await loadProductsFromDb();
+    renderPosProducts();
+    renderAdminTable();
+    refreshTracking();
+
+    if (newOrder.khqr) {
+        openDynamicKhqrModal(newOrder.trackCode, newOrder.khqr);
+    } else {
+        showToast(`ការកម្ម៉ង់ ${newOrder.id} ត្រូវបានផ្ញើរួចរាល់!`);
+        if (!isAdminLoggedIn) setTimeout(openTrackModal, 450);
+    }
+}
+
+// Extend switchAdminSub to include 'khqr'
+function switchAdminSub(sub) {
+    const panes = { products: 'adminProductsPane', orders: 'adminOrdersPane', khqr: 'adminKhqrPane', banners: 'adminBannersPane', reports: 'adminReportsPane', settings: 'adminSettingsPane', audit: 'adminAuditPane', shifts: 'adminShiftsPane' };
+    const btns = { products: 'adminSubProducts', orders: 'adminSubOrders', khqr: 'adminSubKhqr', banners: 'adminSubBanners', reports: 'adminSubReports', settings: 'adminSubSettings', audit: 'adminSubAudit', shifts: 'adminSubShifts' };
+    for (const k in panes) {
+        const paneEl = document.getElementById(panes[k]);
+        if (paneEl) paneEl.classList.toggle('d-none', k !== sub);
+        const b = document.getElementById(btns[k]);
+        if (b) {
+            b.className = 'btn rounded-pill px-4 fw-bold ' + (k === 'orders' ? 'position-relative ' : '') + (k === sub ? 'btn-gold' : 'btn-outline-gold');
+            b.classList.toggle('d-none', adminRole !== 'owner' && k !== 'orders' && k !== 'khqr' && k !== 'shifts');
+        }
+    }
+    if (sub === 'orders') refreshOrders().then(renderDashboard);
+    if (sub === 'khqr') loadAdminKhqrPayments();
+    if (sub === 'banners') loadAdminBanners();
+    if (sub === 'reports') { if (!document.getElementById('reportFrom').value) setReportRange('7d'); else loadReports(); }
+    if (sub === 'settings') loadAdminSettings();
+    if (sub === 'audit') loadAudit();
+    if (sub === 'shifts') loadShifts();
+}
+
+async function loadAdminKhqrPayments() {
+    if (!isAdminLoggedIn) return;
+    const status = document.getElementById('adminKhqrStatusFilter').value;
+    try {
+        const d = await api(`/api/admin/khqr-payments?status=${encodeURIComponent(status)}`, { auth: true });
+        const cfg = d.config;
+        document.getElementById('adminKhqrConfigInfo').innerHTML =
+            `Mode: <span class="badge ${cfg.mode === 'production' ? 'bg-success' : 'bg-warning text-dark'}">${esc(cfg.mode.toUpperCase())}</span> · ` +
+            `គណនីទទួលប្រាក់: <b class="text-white">${esc(cfg.merchantAccount || 'មិនទាន់កំណត់')}</b> · ` +
+            `Bakong API Token: <span class="badge ${cfg.apiTokenConfigured ? 'bg-success' : 'bg-danger'}">${cfg.apiTokenConfigured ? 'បានភ្ជាប់រួចរាល់' : 'មិនទាន់កំណត់ក្នុង .env'}</span>`;
+
+        const tbody = document.getElementById('adminKhqrTableBody');
+        if (!d.payments.length) {
+            tbody.innerHTML = '<tr><td colspan="8" class="text-center text-secondary py-4">មិនទាន់មានកំណត់ត្រាការបង់ប្រាក់ KHQR</td></tr>';
+            return;
+        }
+        const badgeMap = {
+            pending: '<span class="badge status-badge-pending">កំពុងរង់ចាំ</span>',
+            paid: '<span class="badge status-badge-completed">បានផ្ទៀងផ្ទាត់ (Paid)</span>',
+            failed: '<span class="badge status-badge-cancelled">បរាជ័យ</span>',
+            expired: '<span class="badge bg-secondary">ផុតកំណត់</span>',
+        };
+        tbody.innerHTML = d.payments.map(p => {
+            const expStr = p.currency === 'KHR' ? fmtKhr(p.expectedAmount) : money(p.expectedAmount);
+            const verStr = p.verifiedAmount != null ? (p.verifiedCurrency === 'KHR' ? fmtKhr(p.verifiedAmount) : money(p.verifiedAmount)) : '-';
+            return `<tr>
+                <td><b class="text-gold">${esc(p.orderId)}</b><div class="small text-secondary">${esc(p.customerName)} (${esc(p.tableNo)})</div></td>
+                <td><code class="text-info">${esc(p.paymentRef)}</code><div class="small text-secondary">MD5: ${esc(p.md5.slice(0, 12))}...</div></td>
+                <td class="text-end fw-bold text-gold">${expStr}</td>
+                <td class="text-end fw-bold ${p.status === 'paid' ? 'text-success' : 'text-secondary'}">${verStr}</td>
+                <td class="small">
+                    ${p.fromAccountId ? `<div>ពី: <b>${esc(p.fromAccountId)}</b></div>` : ''}
+                    ${p.bakongHash ? `<div class="text-secondary" title="${esc(p.bakongHash)}">Hash: ${esc(p.bakongHash.slice(0, 16))}...</div>` : '<span class="text-secondary">-</span>'}
+                    ${p.failReason ? `<div class="text-danger small">${esc(p.failReason)}</div>` : ''}
+                </td>
+                <td class="small text-secondary">${esc(new Date(p.createdAt).toLocaleString('en-GB'))}</td>
+                <td>${badgeMap[p.status] || esc(p.status)}</td>
+                <td class="text-center">
+                    ${p.status !== 'paid' ? `<button class="btn btn-sm btn-outline-gold rounded-pill px-3" onclick="adminVerifyKhqrNow('${esc(p.paymentRef)}')"><i class="fa-solid fa-magnifying-glass-dollar me-1"></i>ពិនិត្យ</button>` : '<i class="fa-solid fa-circle-check text-success"></i>'}
+                </td>
+            </tr>`;
+        }).join('');
+    } catch (err) { alert(err.message); }
+}
+
+async function adminVerifyKhqrNow(paymentRef) {
+    try {
+        const r = await api(`/api/admin/khqr-payments/${encodeURIComponent(paymentRef)}/verify`, { method: 'POST', auth: true });
+        showToast(r.status === 'paid' ? '✅ បានផ្ទៀងផ្ទាត់ឃើញការបង់ប្រាក់ជោគជ័យ!' : `ស្ថានភាពបច្ចុប្បន្ន: ${r.status}`);
+        loadAdminKhqrPayments();
+        refreshOrders().then(renderDashboard);
+    } catch (err) { alert(err.message); }
+}
     </script>
 </body>
 </html>
