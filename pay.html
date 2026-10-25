@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="km">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#0b0e14">
+    <meta name="robots" content="noindex">
+    <title>បង់ប្រាក់តាម KHQR - កាហ្វេ ម្លប់ដូង</title>
+    <link href="https://fonts.googleapis.com/css2?family=Kantumruy+Pro:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        * { box-sizing: border-box; font-family: 'Kantumruy Pro', sans-serif; }
+        body { margin: 0; background: #0b0e14; color: #e2e8f0; min-height: 100vh; display: flex; justify-content: center; padding: 16px; }
+        .wrap { width: 100%; max-width: 440px; }
+        .brand { text-align: center; color: #ffd700; font-weight: 700; font-size: 1.3rem; margin: 8px 0 14px; }
+        .card { background: rgba(23, 28, 40, .9); border: 1px solid rgba(255, 255, 255, .1); border-radius: 18px; padding: 18px; margin-bottom: 14px; }
+        .row { display: flex; justify-content: space-between; gap: 10px; padding: 4px 0; font-size: .95rem; }
+        .muted { color: #94a3b8; }
+        .amount { font-size: 2.2rem; font-weight: 700; color: #ffd700; text-align: center; line-height: 1.1; }
+        .amount small { display: block; font-size: 1rem; color: #94a3b8; font-weight: 400; margin-top: 4px; }
+        .badge { display: inline-block; padding: 5px 14px; border-radius: 999px; font-weight: 700; font-size: .9rem; }
+        .b-pending { background: rgba(255, 193, 7, .15); color: #ffc107; border: 1px solid rgba(255, 193, 7, .4); }
+        .b-paid { background: rgba(25, 135, 84, .2); color: #20c997; border: 1px solid rgba(32, 201, 151, .5); }
+        .b-failed { background: rgba(220, 53, 69, .15); color: #ea868f; border: 1px solid rgba(220, 53, 69, .4); }
+        .b-expired { background: rgba(148, 163, 184, .15); color: #cbd5e1; border: 1px solid rgba(148, 163, 184, .4); }
+        .b-review { background: rgba(13, 202, 240, .15); color: #0dcaf0; border: 1px solid rgba(13, 202, 240, .4); }
+        .qrbox { background: #fff; border-radius: 16px; padding: 14px; width: 262px; height: 262px; margin: 14px auto; display: flex; align-items: center; justify-content: center; }
+        .qrbox.dim { opacity: .25; }
+        .timer { text-align: center; font-size: 1.4rem; font-weight: 700; }
+        .timer.low { color: #ff6b6b; }
+        .note { font-size: .85rem; color: #cbd5e1; line-height: 1.5; }
+        .alert { border-radius: 12px; padding: 10px 12px; font-size: .88rem; margin-top: 10px; line-height: 1.5; }
+        .a-warn { background: rgba(255, 193, 7, .12); border: 1px solid rgba(255, 193, 7, .35); color: #ffe08a; }
+        .a-sandbox { background: rgba(220, 53, 69, .15); border: 1px solid rgba(220, 53, 69, .5); color: #ffb3bb; text-align: center; font-weight: 700; margin-bottom: 12px; }
+        button, a.btn { display: block; width: 100%; padding: 12px; border: 0; border-radius: 12px; background: #ffd700; color: #0b0e14; font-weight: 700; font-size: 1rem; text-align: center; text-decoration: none; cursor: pointer; margin-top: 10px; }
+        button.alt, a.btn.alt { background: transparent; color: #ffd700; border: 1px solid rgba(255, 215, 0, .5); }
+        .center { text-align: center; }
+        .big { font-size: 3rem; line-height: 1; }
+        ol { padding-left: 20px; margin: 8px 0 0; }
+    </style>
+</head>
+<body>
+<div class="wrap">
+    <div class="brand">☕ កាហ្វេ ម្លប់ដូង</div>
+    <div id="sandbox" class="alert a-sandbox" style="display:none">⚠️ របៀបសាកល្បង (SANDBOX) មិនមែនប្រាក់ពិតទេ</div>
+    <div id="app"><div class="card center muted">កំពុងផ្ទុក...</div></div>
+</div>
+
+<!-- pinned version; the QR text is not a secret -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script>
+    const API_BASE = (localStorage.getItem('udom_api_base') || '').replace(/\/+$/, '');
+    const code = new URLSearchParams(location.search).get('c') || '';
+    let data = null, offset = 0, drawnFor = '', pollTimer = null;
+
+    const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const fmt = (cur, n) => cur === 'USD' ? '$' + Number(n).toFixed(2) : '៛' + Number(n).toLocaleString('en-US');
+    const pad = (n) => String(n).padStart(2, '0');
+
+    async function load() {
+        try {
+            const res = await fetch(API_BASE + '/api/pay/' + encodeURIComponent(code));
+            const body = await res.json().catch(() => ({}));
+            if (!res.ok) { showError(body.error || 'រកមិនឃើញការកម្ម៉ង់'); return; }
+            data = body;
+            offset = Date.parse(body.serverNow) - Date.now();
+            document.getElementById('sandbox').style.display = body.payment.env === 'sandbox' ? 'block' : 'none';
+            render();
+        } catch (e) {
+            // keep the last known state on screen; just try again
+        }
+        schedule();
+    }
+
+    function schedule() {
+        clearTimeout(pollTimer);
+        const st = data && data.payment.status;
+        if (!data || st === 'pending' || st === 'review') pollTimer = setTimeout(load, 3000);
+    }
+
+    function showError(msg) {
+        document.getElementById('app').innerHTML = `<div class="card center"><div class="big">⚠️</div><p>${esc(msg)}</p><a class="btn alt" href="./">ត្រឡប់ទៅហាង</a></div>`;
+    }
+
+    function summary(d) {
+        const p = d.payment;
+        return `<div class="card">
+            <div class="row"><span class="muted">លេខការកម្ម៉ង់</span><b>${esc(d.orderId)}</b></div>
+            <div class="row"><span class="muted">លេខយោងបង់ប្រាក់</span><span style="font-size:.8rem">${esc(p.reference)}</span></div>
+            <div class="row"><span class="muted">ទំនិញ</span><span style="text-align:right">${d.items.map(i => esc(i.name) + ' ×' + i.quantity).join('<br>')}</span></div>
+        </div>`;
+    }
+
+    function amountBlock(d) {
+        const p = d.payment;
+        const other = p.currency === 'USD' ? '≈ ' + fmt('KHR', Math.round(d.total * d.exchangeRate / 100) * 100) : '≈ ' + fmt('USD', d.total);
+        return `<div class="amount">${fmt(p.currency, p.amount)}<small>${other}</small></div>`;
+    }
+
+    function render() {
+        const d = data, p = d.payment, app = document.getElementById('app');
+        let html = '';
+        if (p.status === 'pending') {
+            html += `<div class="card">
+                <div class="center"><span class="badge b-pending">⏳ កំពុងរង់ចាំការបង់ប្រាក់</span></div>
+                <div style="margin-top:12px">${amountBlock(d)}</div>
+                <div class="qrbox" id="qrbox"></div>
+                <div class="timer" id="timer">--:--</div>
+                <div class="center muted" style="font-size:.8rem" id="timerLabel">ផុតកំណត់ក្នុង</div>
+                ${p.delayed ? `<div class="alert a-warn">⚠️ ការផ្ទៀងផ្ទាត់យឺតបន្តិច។ <b>បើអ្នកបានបង់រួច សូមកុំបង់ម្តងទៀត</b> សូមរង់ចាំ ប្រព័ន្ធនឹងព្យាយាមម្តងទៀតដោយស្វ័យប្រវត្តិ។</div>` : ''}
+                <div class="note" style="margin-top:12px"><b>របៀបបង់ប្រាក់៖</b>
+                    <ol>
+                        <li>បើក ABA Mobile, ACLEDA Mobile ឬកម្មវិធីធនាគារណាមួយដែលគាំទ្រ KHQR</li>
+                        <li>ស្កេន QR នេះ ហើយពិនិត្យថាចំនួនទឹកប្រាក់ត្រូវ <b>${fmt(p.currency, p.amount)}</b></li>
+                        <li>បញ្ជាក់ការបង់ប្រាក់ ហើយទុកទំព័រនេះបើក ស្ថានភាពនឹងប្តូរដោយស្វ័យប្រវត្តិ</li>
+                    </ol>
+                    <div style="margin-top:6px" class="muted">កុំប្តូរចំនួនទឹកប្រាក់ និងកុំបង់ពីរដង។</div>
+                </div>
+            </div>` + summary(d);
+        } else if (p.status === 'paid') {
+            html += `<div class="card center">
+                <div class="big">✅</div>
+                <p><span class="badge b-paid">បានបង់ប្រាក់រួចរាល់</span></p>
+                <div class="amount" style="font-size:1.8rem">${fmt(p.currency, p.amount)}</div>
+                <p class="note">អរគុណ! យើងបានទទួលប្រាក់របស់អ្នកហើយ។ ការកម្ម៉ង់ <b>${esc(d.orderId)}</b> កំពុងត្រូវបានរៀបចំ។<br>
+                ${p.verifiedAt ? 'ផ្ទៀងផ្ទាត់នៅ ' + new Date(p.verifiedAt).toLocaleString('en-GB') : ''}</p>
+                <a class="btn" href="./">ត្រឡប់ទៅហាង</a>
+            </div>` + summary(d);
+        } else if (p.status === 'failed') {
+            html += `<div class="card center">
+                <div class="big">❌</div>
+                <p><span class="badge b-failed">ការបង់ប្រាក់មិនបានជោគជ័យ</span></p>
+                <p class="note">ធនាគាររាយការណ៍ថាប្រតិបត្តិការនេះបរាជ័យ។ ប្រាក់អាចមិនត្រូវបានកាត់ពីគណនីអ្នកទេ សូមពិនិត្យក្នុងកម្មវិធីធនាគារ។ អ្នកអាចសាកល្បងម្តងទៀតជាមួយ QR ថ្មី។</p>
+                ${d.canRetry ? retryButtons(d) : ''}
+            </div>` + summary(d);
+        } else if (p.status === 'expired') {
+            html += `<div class="card center">
+                <div class="big">⌛</div>
+                <p><span class="badge b-expired">QR ផុតកំណត់</span></p>
+                <p class="note">យើងមិនទាន់ទទួលបានការបង់ប្រាក់សម្រាប់ QR នេះទេ។ <b>កុំស្កេន QR ចាស់ទៀត</b> សូមបង្កើត QR ថ្មី។ បើអ្នកបានបង់រួចហើយ សូមទាក់ទងបុគ្គលិកជាមួយលេខ ${esc(d.orderId)}។</p>
+                ${d.canRetry ? retryButtons(d) : `<a class="btn alt" href="./">ត្រឡប់ទៅហាង</a>`}
+            </div>` + summary(d);
+        } else { // review
+            html += `<div class="card center">
+                <div class="big">🔎</div>
+                <p><span class="badge b-review">កំពុងត្រួតពិនិត្យ</span></p>
+                <p class="note">យើងបានឃើញប្រតិបត្តិការមួយ ប៉ុន្តែត្រូវការការត្រួតពិនិត្យដោយបុគ្គលិក មុននឹងបញ្ជាក់ការកម្ម៉ង់។ សូមប្រាប់បុគ្គលិកនូវលេខ <b>${esc(d.orderId)}</b> ហើយកុំបង់ម្តងទៀត។</p>
+            </div>` + summary(d);
+        }
+        app.innerHTML = html;
+        drawnFor = '';
+        if (p.status === 'pending') { drawQr(); tickTimer(); }
+    }
+
+    function retryButtons(d) {
+        const other = d.payment.currency === 'USD' ? 'KHR' : 'USD';
+        return `<button onclick="retry('${d.payment.currency}')">បង្កើត QR ថ្មី (${d.payment.currency === 'USD' ? 'ដុល្លារ $' : 'រៀល ៛'})</button>
+                <button class="alt" onclick="retry('${other}')">ប្តូរទៅបង់ជា ${other === 'USD' ? 'ដុល្លារ $' : 'រៀល ៛'}</button>`;
+    }
+
+    async function retry(currency) {
+        try {
+            const res = await fetch(API_BASE + '/api/pay/' + encodeURIComponent(code) + '/retry', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ currency })
+            });
+            const body = await res.json().catch(() => ({}));
+            if (!res.ok) { alert(body.error || 'មានបញ្ហា'); return; }
+            data = null; load();
+        } catch (e) { alert('មិនអាចភ្ជាប់ទៅ Server បានទេ'); }
+    }
+
+    function drawQr() {
+        const box = document.getElementById('qrbox');
+        const text = data.payment.khqr;
+        if (!box || !text || drawnFor === text) return;
+        box.innerHTML = '';
+        if (typeof QRCode === 'undefined') { box.innerHTML = '<span style="color:#000;text-align:center">មិនអាចបង្ហាញ QR បានទេ សូម refresh</span>'; return; }
+        new QRCode(box, { text, width: 234, height: 234, correctLevel: QRCode.CorrectLevel.M });
+        drawnFor = text;
+    }
+
+    function tickTimer() {
+        if (!data || data.payment.status !== 'pending') return;
+        const left = Date.parse(data.payment.expiresAt) - (Date.now() + offset);
+        const el = document.getElementById('timer'), lab = document.getElementById('timerLabel'), box = document.getElementById('qrbox');
+        if (!el) return;
+        if (left > 0) {
+            const s = Math.floor(left / 1000);
+            el.textContent = pad(Math.floor(s / 60)) + ':' + pad(s % 60);
+            el.className = 'timer' + (s < 60 ? ' low' : '');
+            lab.textContent = 'ផុតកំណត់ក្នុង';
+        } else {
+            el.textContent = '00:00';
+            el.className = 'timer low';
+            lab.textContent = 'ពេលវេលាបានផុត សូមកុំស្កេនទៀត។ ប្រសិនបើអ្នកទើបតែបង់ ប្រព័ន្ធកំពុងពិនិត្យចុងក្រោយ...';
+            if (box) box.classList.add('dim');
+        }
+    }
+    setInterval(tickTimer, 1000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden && data && data.payment.status === 'pending') load(); });
+
+    if (!code) showError('គ្មានលេខកូដការកម្ម៉ង់'); else load();
+</script>
+</body>
+</html>
