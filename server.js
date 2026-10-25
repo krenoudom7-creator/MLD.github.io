@@ -11,11 +11,13 @@ const rateLimit = require('express-rate-limit');
 const multer = require('multer');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
+const QRCode = require('qrcode');
+
 let DatabaseSync;
 try {
   ({ DatabaseSync } = require('node:sqlite'));
 } catch (e) {
-  console.error('\n❌ Node.js version របស់អ្នកចាស់ពេក (ត្រូវការ v22.13 ឡើងទៅ)។ សូមដំឡើង Node.js LTS ថ្មីពី https://nodejs.org\n   Your Node.js (' + process.version + ') has no built-in SQLite. Install Node 22.13+ or newer.\n');
+  console.error('\n❌ Node.js version របស់អ្នកចាស់ពេក (ត្រូវការ v22.13 ឡើងទៅ)។\n');
   process.exit(1);
 }
 
@@ -23,13 +25,12 @@ try {
 // Config
 // ---------------------------------------------------------------
 const PORT = process.env.PORT || 3000;
-const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');   // e.g. /var/data/db on a Render disk
-const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, 'uploads'); // e.g. /var/data/uploads
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
+const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, 'uploads');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
-// JWT secret: from env, else generated once and persisted (so logins survive restarts)
 function getJwtSecret() {
   if (process.env.JWT_SECRET) return process.env.JWT_SECRET;
   const f = path.join(DATA_DIR, 'jwt.secret');
@@ -39,15 +40,96 @@ function getJwtSecret() {
 const JWT_SECRET = getJwtSecret();
 const TOKEN_TTL = process.env.TOKEN_TTL || '8h';
 
-// Cambodia is UTC+7. Reports group orders by local date using this offset.
 const TZ_HOURS = Number.isFinite(Number(process.env.TZ_OFFSET)) ? Number(process.env.TZ_OFFSET) : 7;
 const TZ_MOD = `${TZ_HOURS >= 0 ? '+' : '-'}${Math.abs(TZ_HOURS)} hours`;
 const BACKUP_DIR = path.join(DATA_DIR, 'backups');
 fs.mkdirSync(BACKUP_DIR, { recursive: true });
 
-const CATEGORIES = ['coffee', 'tea', 'drink', 'bakery', 'food'];
-const FOOD_CATS = ['bakery', 'food']; // food items have no sugar level, only a note
+const CATEGORIES = ['coffee', 'tea', 'drink', 'bakery', 'food', 'clothing'];
+const FOOD_CATS = ['bakery', 'food', 'clothing'];
 const ORDER_STATUSES = ['pending', 'preparing', 'completed', 'cancelled'];
+
+// KHQR & Bakong Official API Configuration (Never exposed to frontend)
+const KHQR_CONFIG = {
+  mode: (process.env.KHQR_MODE || 'production').toLowerCase() === 'sandbox' ? 'sandbox' : 'production',
+  apiBase: (process.env.BAKONG_API_BASE || (process.env.KHQR_MODE === 'sandbox' ? 'https://sit-api-bakong.nbc.gov.kh/v1' : 'https://api-bakong.nbc.gov.kh/v1')).replace(/\/+$/, ''),
+  apiToken: (process.env.BAKONG_API_TOKEN || '').trim(),
+  accountId: (process.env.BAKONG_ACCOUNT_ID || '').trim(),
+  merchantName: (process.env.BAKONG_MERCHANT_NAME || 'MLOB DOUNG COFFEE').trim().slice(0, 25),
+  merchantCity: (process.env.BAKONG_MERCHANT_CITY || 'Phnom Penh').trim().slice(0, 15),
+  acquiringBank: (process.env.BAKONG_ACQUIRING_BANK || '').trim().slice(0, 32),
+  merchantMobile: (process.env.BAKONG_MERCHANT_MOBILE || '').trim().slice(0, 25),
+  webhookSecret: (process.env.PAYMENT_WEBHOOK_SECRET || '').trim(),
+  ttlSeconds: Math.min(Math.max(Number(process.env.KHQR_TTL_SECONDS) || 300, 60), 1800),
+  deliveryFeeUsd: Math.max(Number(process.env.DELIVERY_FEE_USD) || 0, 0),
+};
+
+// ---------------------------------------------------------------
+// EMVCo / NBC Bakong Dynamic KHQR Generator (Pure Spec Compliant)
+// ---------------------------------------------------------------
+function tlv(tag, val) {
+  const s = String(val ?? '');
+  const byteLen = Buffer.byteLength(s, 'utf8');
+  return `${String(tag).padStart(2, '0')}${String(byteLen).padStart(2, '0')}${s}`;
+}
+
+function crc16Ccitt(str) {
+  const buf = Buffer.from(str, 'utf8');
+  let crc = 0xffff;
+  for (let i = 0; i < buf.length; i++) {
+    crc ^= buf[i] << 8;
+    for (let j = 0; j < 8; j++) {
+      crc = (crc & 0x8000) ? ((crc << 1) ^ 0x1021) & 0xffff : (crc << 1) & 0xffff;
+    }
+  }
+  return crc.toString(16).toUpperCase().padStart(4, '0');
+}
+
+function generateDynamicKhqrPayload({ accountId, merchantName, merchantCity, acquiringBank, mobileNumber, currency, amount, billNumber, storeLabel, terminalLabel, expirationMs }) {
+  if (!accountId || !accountId.includes('@')) {
+    throw new Error('BAKONG_ACCOUNT_ID មិនទាន់បានកំណត់ត្រឹមត្រូវក្នុង Server (.env)');
+  }
+  const isKhr = currency === 'KHR';
+  const currencyCode = isKhr ? '116' : '840';
+  const formattedAmount = isKhr ? String(Math.round(Number(amount))) : Number(amount).toFixed(2);
+
+  // Tag 29: Merchant Account Information (Individual/Merchant Bakong Account)
+  let tag29Inner = tlv('00', accountId);
+  if (acquiringBank) tag29Inner += tlv('01', acquiringBank);
+  if (mobileNumber) tag29Inner += tlv('02', mobileNumber);
+
+  // Tag 62: Additional Data Field Template (Bill Number / Payment Reference)
+  let tag62Inner = '';
+  if (billNumber) tag62Inner += tlv('01', String(billNumber).slice(0, 25));
+  if (mobileNumber) tag62Inner += tlv('02', String(mobileNumber).slice(0, 25));
+  if (storeLabel) tag62Inner += tlv('03', String(storeLabel).slice(0, 25));
+  if (terminalLabel) tag62Inner += tlv('07', String(terminalLabel).slice(0, 25));
+
+  // Tag 99: Timestamp & Dynamic KHQR Expiration (NBC KHQR Spec)
+  const createdMs = Date.now();
+  const expMs = expirationMs || (createdMs + KHQR_CONFIG.ttlSeconds * 1000);
+  const tag99Inner = tlv('00', String(createdMs)) + tlv('01', String(expMs));
+
+  const body =
+    tlv('00', '01') +                         // Payload Format Indicator
+    tlv('01', '12') +                         // Point of Initiation Method: 12 = Dynamic QR
+    tlv('29', tag29Inner) +                   // Merchant Account Info
+    tlv('52', '5999') +                       // Merchant Category Code
+    tlv('53', currencyCode) +                 // Transaction Currency (840=USD, 116=KHR)
+    tlv('54', formattedAmount) +              // Transaction Amount
+    tlv('58', 'KH') +                         // Country Code
+    tlv('59', merchantName || 'MERCHANT') +   // Merchant Name
+    tlv('60', merchantCity || 'Phnom Penh') + // Merchant City
+    (tag62Inner ? tlv('62', tag62Inner) : '') +
+    tlv('99', tag99Inner) +
+    '6304';                                   // CRC Tag + Length
+
+  const crc = crc16Ccitt(body);
+  const qrString = body + crc;
+  const md5 = crypto.createHash('md5').update(qrString, 'utf8').digest('hex');
+
+  return { qrString, md5, createdMs, expMs, formattedAmount: Number(formattedAmount), currency };
+}
 
 // ---------------------------------------------------------------
 // Database
@@ -55,7 +137,6 @@ const ORDER_STATUSES = ['pending', 'preparing', 'completed', 'cancelled'];
 const db = new DatabaseSync(path.join(DATA_DIR, 'mlob-doung.db'));
 db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
 
-// Minimal transaction helper (node:sqlite has no .transaction()). Rolls back if fn throws.
 function tx(fn) {
   return (...args) => {
     db.exec('BEGIN IMMEDIATE');
@@ -64,7 +145,7 @@ function tx(fn) {
       db.exec('COMMIT');
       return result;
     } catch (err) {
-      try { db.exec('ROLLBACK'); } catch (_) { /* already rolled back */ }
+      try { db.exec('ROLLBACK'); } catch (_) {}
       throw err;
     }
   };
@@ -109,29 +190,19 @@ CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 CREATE INDEX IF NOT EXISTS idx_items_order ON order_items(order_seq);
 `);
 
-// Migration: per-item customer note (older databases lack this column)
-if (!db.prepare('PRAGMA table_info(order_items)').all().some((c) => c.name === 'note')) {
-  db.exec("ALTER TABLE order_items ADD COLUMN note TEXT NOT NULL DEFAULT ''");
-}
-
-// Migration: per-product discount percent (0-100)
-if (!db.prepare('PRAGMA table_info(products)').all().some((c) => c.name === 'discount')) {
-  db.exec('ALTER TABLE products ADD COLUMN discount INTEGER NOT NULL DEFAULT 0');
-}
-
-// Migrations: roles, payments, order tracking, settings
 const hasCol = (t, c) => db.prepare(`PRAGMA table_info(${t})`).all().some((x) => x.name === c);
+if (!hasCol('order_items', 'note')) db.exec("ALTER TABLE order_items ADD COLUMN note TEXT NOT NULL DEFAULT ''");
+if (!hasCol('products', 'discount')) db.exec('ALTER TABLE products ADD COLUMN discount INTEGER NOT NULL DEFAULT 0');
 if (!hasCol('admins', 'role')) db.exec("ALTER TABLE admins ADD COLUMN role TEXT NOT NULL DEFAULT 'owner'");
 if (!hasCol('admins', 'must_change')) {
   db.exec('ALTER TABLE admins ADD COLUMN must_change INTEGER NOT NULL DEFAULT 0');
-  // Existing accounts still using the well-known default password must change it at next login
   for (const a of db.prepare('SELECT id, password_hash FROM admins').all()) {
     if (bcrypt.compareSync('123456', a.password_hash)) db.prepare('UPDATE admins SET must_change = 1 WHERE id = ?').run(a.id);
   }
 }
 for (const [col, ddl] of [
-  ['pay_status', "TEXT NOT NULL DEFAULT 'unpaid'"],   // unpaid | paid | refunded
-  ['pay_method', "TEXT NOT NULL DEFAULT ''"],         // cash | khqr | other
+  ['pay_status', "TEXT NOT NULL DEFAULT 'unpaid'"],
+  ['pay_method', "TEXT NOT NULL DEFAULT ''"],
   ['received', 'REAL NOT NULL DEFAULT 0'],
   ['received_cur', "TEXT NOT NULL DEFAULT 'USD'"],
   ['change_usd', 'REAL NOT NULL DEFAULT 0'],
@@ -139,17 +210,54 @@ for (const [col, ddl] of [
   ['paid_at', 'TEXT'],
   ['track_code', 'TEXT'],
   ['ip', "TEXT NOT NULL DEFAULT ''"],
+  ['subtotal', 'REAL NOT NULL DEFAULT 0'],
+  ['delivery_fee', 'REAL NOT NULL DEFAULT 0'],
 ]) {
   if (!hasCol('orders', col)) db.exec(`ALTER TABLE orders ADD COLUMN ${col} ${ddl}`);
 }
 db.exec('CREATE INDEX IF NOT EXISTS idx_orders_track ON orders(track_code)');
 if (!hasCol('products', 'options')) db.exec("ALTER TABLE products ADD COLUMN options TEXT NOT NULL DEFAULT '[]'");
 if (!hasCol('order_items', 'options')) db.exec("ALTER TABLE order_items ADD COLUMN options TEXT NOT NULL DEFAULT ''");
-if (!hasCol('orders', 'status_at')) db.exec('ALTER TABLE orders ADD COLUMN status_at TEXT'); // when the status last changed (queue board)
-if (!hasCol('order_items', 'kind')) { // 'drink' | 'food' snapshot, so old orders keep their meaning if a product changes category
+if (!hasCol('orders', 'status_at')) db.exec('ALTER TABLE orders ADD COLUMN status_at TEXT');
+if (!hasCol('order_items', 'kind')) {
   db.exec("ALTER TABLE order_items ADD COLUMN kind TEXT NOT NULL DEFAULT 'drink'");
-  db.exec("UPDATE order_items SET kind = 'food' WHERE product_id IN (SELECT id FROM products WHERE category IN ('bakery','food'))");
+  db.exec("UPDATE order_items SET kind = 'food' WHERE product_id IN (SELECT id FROM products WHERE category IN ('bakery','food','clothing'))");
 }
+
+// KHQR Payments Table (Stores all dynamic QR sessions, references, MD5 hashes, and verified Bakong records)
+db.exec(`
+CREATE TABLE IF NOT EXISTS khqr_payments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  order_seq INTEGER NOT NULL REFERENCES orders(seq) ON DELETE CASCADE,
+  payment_ref TEXT NOT NULL UNIQUE,
+  md5 TEXT NOT NULL UNIQUE,
+  qr_string TEXT NOT NULL,
+  currency TEXT NOT NULL CHECK (currency IN ('USD', 'KHR')),
+  expected_amount REAL NOT NULL CHECK (expected_amount > 0),
+  expected_usd REAL NOT NULL CHECK (expected_usd > 0),
+  exchange_rate REAL NOT NULL,
+  merchant_account TEXT NOT NULL,
+  environment TEXT NOT NULL DEFAULT 'production',
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'paid', 'failed', 'expired')),
+  verified_amount REAL,
+  verified_currency TEXT,
+  bakong_hash TEXT UNIQUE,
+  from_account_id TEXT,
+  to_account_id TEXT,
+  external_ref TEXT,
+  raw_response TEXT,
+  fail_reason TEXT NOT NULL DEFAULT '',
+  check_count INTEGER NOT NULL DEFAULT 0,
+  last_checked_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  expires_at TEXT NOT NULL,
+  paid_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_khqr_order ON khqr_payments(order_seq);
+CREATE INDEX IF NOT EXISTS idx_khqr_status ON khqr_payments(status);
+CREATE INDEX IF NOT EXISTS idx_khqr_md5 ON khqr_payments(md5);
+`);
+
 db.exec(`CREATE TABLE IF NOT EXISTS shifts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   opened_at TEXT NOT NULL DEFAULT (datetime('now')), opened_by TEXT NOT NULL,
@@ -164,7 +272,7 @@ db.exec(`CREATE TABLE IF NOT EXISTS audit_log (
   admin_id INTEGER, username TEXT NOT NULL DEFAULT '',
   action TEXT NOT NULL, target TEXT NOT NULL DEFAULT '', detail TEXT NOT NULL DEFAULT ''
 )`);
-// Who did what. `req` may be null (system actions) or any object with .admin
+
 const audit = (req, action, target = '', detail = '') => {
   try {
     db.prepare('INSERT INTO audit_log (admin_id, username, action, target, detail) VALUES (?, ?, ?, ?, ?)')
@@ -172,7 +280,7 @@ const audit = (req, action, target = '', detail = '') => {
   } catch (e) { console.error('audit failed:', e.message); }
 };
 
-// ---- Telegram (optional: set TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID) ----
+// ---- Telegram ----
 const TG_API = process.env.TELEGRAM_API || 'https://api.telegram.org';
 const tgOn = () => !!(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID);
 async function tgSend(text) {
@@ -199,7 +307,7 @@ async function tgSendFile(file, caption) {
 function tgAfterOrder(order, items) {
   if (!tgOn()) return;
   const lines = order.items.map((i) => `• ${i.name} ×${i.quantity}${i.options && i.options.length ? ' [' + i.options.map((o) => o.label).join('/') + ']' : ''}${i.sugar ? ' (ស្ករ ' + i.sugar + ')' : ''}${i.note ? ' 📝 ' + i.note : ''}`).join('\n');
-  tgSend(`🔔 ការកម្ម៉ង់ថ្មី ${order.id}\n👤 ${order.customerName} · ${order.tableNo}\n${lines}\n💰 $${order.total.toFixed(2)}`);
+  tgSend(`🔔 ការកម្ម៉ង់ថ្មី ${order.id}\n👤 ${order.customerName} · ${order.tableNo}\n${lines}\n💰 $${order.total.toFixed(2)} (កំពុងរង់ចាំបង់ប្រាក់ KHQR)`);
   const low = Number(process.env.LOW_STOCK ?? 5), qty = {};
   for (const it of items) qty[it.id] = (qty[it.id] || 0) + Number(it.quantity);
   for (const [pid, q] of Object.entries(qty)) {
@@ -208,23 +316,258 @@ function tgAfterOrder(order, items) {
   }
 }
 
-// ---- Housekeeping: auto-cancel stale unaccepted orders + daily Telegram summary ----
+const getSetting = (k, d = '') => { const r = db.prepare('SELECT value FROM settings WHERE key = ?').get(k); return r ? r.value : d; };
+const setSetting = (k, v) => db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(k, String(v));
+const getRate = () => { const r = Number(getSetting('exchange_rate', '4100')); return r > 0 ? r : 4100; };
+const khrOf = (usd, rate) => Math.round((usd * rate) / 100) * 100;
+const getBakongAccount = () => (getSetting('bakong_account_id', '') || KHQR_CONFIG.accountId).trim();
+const getMerchantName = () => (getSetting('bakong_merchant_name', '') || KHQR_CONFIG.merchantName).trim().slice(0, 25);
+
+// ---------------------------------------------------------------
+// Real-Time Bakong KHQR Verification Engine
+// ---------------------------------------------------------------
+const activeVerifications = new Set(); // In-process lock per payment_ref to prevent concurrent race conditions
+
+async function verifyKhqrPaymentRecord(paymentRow, triggerSource = 'poll') {
+  if (!paymentRow) return null;
+  if (paymentRow.status === 'paid') return paymentRow;
+
+  const ref = paymentRow.payment_ref;
+  if (activeVerifications.has(ref)) {
+    return db.prepare('SELECT * FROM khqr_payments WHERE payment_ref = ?').get(ref);
+  }
+  activeVerifications.add(ref);
+
+  try {
+    const fresh = db.prepare('SELECT * FROM khqr_payments WHERE payment_ref = ?').get(ref);
+    if (!fresh || fresh.status === 'paid') return fresh;
+
+    const nowMs = Date.now();
+    const expMs = Date.parse(fresh.expires_at.replace(' ', 'T') + 'Z');
+
+    // If API Token is not configured, keep pending and report configuration error
+    if (!KHQR_CONFIG.apiToken) {
+      if (nowMs > expMs && fresh.status === 'pending') {
+        db.prepare("UPDATE khqr_payments SET status = 'expired', fail_reason = 'QR ផុតកំណត់ (មិនទាន់កំណត់ BAKONG_API_TOKEN)' WHERE id = ? AND status = 'pending'").run(fresh.id);
+      }
+      return db.prepare('SELECT * FROM khqr_payments WHERE id = ?').get(fresh.id);
+    }
+
+    // Call Official NBC Bakong API: POST /check_transaction_by_md5
+    let apiRes, apiBody;
+    try {
+      apiRes = await fetch(`${KHQR_CONFIG.apiBase}/check_transaction_by_md5`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${KHQR_CONFIG.apiToken}`,
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: JSON.stringify({ md5: fresh.md5 }),
+        signal: AbortSignal.timeout(10000),
+      });
+      apiBody = await apiRes.json().catch(() => null);
+    } catch (netErr) {
+      // Network/timeout delay: keep pending and retry safely
+      db.prepare("UPDATE khqr_payments SET check_count = check_count + 1, last_checked_at = datetime('now') WHERE id = ?").run(fresh.id);
+      return db.prepare('SELECT * FROM khqr_payments WHERE id = ?').get(fresh.id);
+    }
+
+    db.prepare("UPDATE khqr_payments SET check_count = check_count + 1, last_checked_at = datetime('now') WHERE id = ?").run(fresh.id);
+
+    // Bakong responseCode === 0 means transaction found and settled on Bakong ledger
+    if (apiRes.ok && apiBody && apiBody.responseCode === 0 && apiBody.data) {
+      const txData = apiBody.data;
+      const rxHash = String(txData.hash || '').trim();
+      const rxAmount = Number(txData.amount);
+      const rxCurrency = String(txData.currency || '').toUpperCase().trim();
+      const rxToAccount = String(txData.toAccountId || '').toLowerCase().trim();
+      const rxFromAccount = String(txData.fromAccountId || '').trim();
+      const rxExtRef = String(txData.externalRef || txData.billNumber || '').trim();
+
+      const expectedTo = String(fresh.merchant_account || '').toLowerCase().trim();
+      const currencyMatches = rxCurrency === fresh.currency;
+      const amountMatches = fresh.currency === 'KHR'
+        ? Math.abs(rxAmount - fresh.expected_amount) < 1
+        : Math.abs(rxAmount - fresh.expected_amount) < 0.005;
+      const accountMatches = !expectedTo || !rxToAccount || rxToAccount === expectedTo;
+
+      if (!rxHash || !currencyMatches || !amountMatches || !accountMatches) {
+        const mismatchMsg = `ទិន្នន័យប្រតិបត្តិការមិនត្រូវគ្នា: ទទួលបាន ${rxAmount} ${rxCurrency} ទៅ ${rxToAccount} (រំពឹងទុក ${fresh.expected_amount} ${fresh.currency} ទៅ ${expectedTo})`;
+        db.prepare(`UPDATE khqr_payments
+          SET status = 'failed', verified_amount = ?, verified_currency = ?, bakong_hash = COALESCE(NULLIF(?, ''), bakong_hash),
+              from_account_id = ?, to_account_id = ?, external_ref = ?, raw_response = ?, fail_reason = ?
+          WHERE id = ? AND status != 'paid'`)
+          .run(Number.isFinite(rxAmount) ? rxAmount : null, rxCurrency, rxHash, rxFromAccount, rxToAccount, rxExtRef, JSON.stringify(apiBody).slice(0, 4000), mismatchMsg, fresh.id);
+        audit(null, 'khqr_mismatch', 'ORD-' + (1000 + fresh.order_seq), mismatchMsg);
+        return db.prepare('SELECT * FROM khqr_payments WHERE id = ?').get(fresh.id);
+      }
+
+      // Atomically mark payment & order as PAID, preventing duplicate bakong_hash reuse
+      let newlyPaid = false;
+      tx(() => {
+        const curr = db.prepare('SELECT * FROM khqr_payments WHERE id = ?').get(fresh.id);
+        if (!curr || curr.status === 'paid') return;
+
+        const dupHash = db.prepare('SELECT id, order_seq FROM khqr_payments WHERE bakong_hash = ? AND id != ?').get(rxHash, fresh.id);
+        if (dupHash) {
+          db.prepare("UPDATE khqr_payments SET status = 'failed', fail_reason = 'លេខកូដប្រតិបត្តិការ Bakong ស្ទួន' WHERE id = ?").run(fresh.id);
+          throw new Error('Duplicate Bakong transaction hash');
+        }
+
+        const orderRow = db.prepare('SELECT * FROM orders WHERE seq = ?').get(fresh.order_seq);
+        if (!orderRow || orderRow.status === 'cancelled') {
+          db.prepare("UPDATE khqr_payments SET status = 'failed', fail_reason = 'ការកម្ម៉ង់ត្រូវបានលុបចោលមុនពេលផ្ទៀងផ្ទាត់' WHERE id = ?").run(fresh.id);
+          return;
+        }
+
+        db.prepare(`UPDATE khqr_payments
+          SET status = 'paid', verified_amount = ?, verified_currency = ?, bakong_hash = ?,
+              from_account_id = ?, to_account_id = ?, external_ref = ?, raw_response = ?,
+              fail_reason = '', paid_at = datetime('now')
+          WHERE id = ?`).run(
+          rxAmount, rxCurrency, rxHash, rxFromAccount, rxToAccount, rxExtRef,
+          JSON.stringify(apiBody).slice(0, 4000), fresh.id
+        );
+
+        db.prepare(`UPDATE orders
+          SET pay_status = 'paid', pay_method = 'khqr', received = ?, received_cur = ?,
+              change_usd = 0, rate = ?, paid_at = datetime('now')
+          WHERE seq = ? AND pay_status != 'paid'`).run(
+          rxAmount, rxCurrency, fresh.exchange_rate, fresh.order_seq
+        );
+        newlyPaid = true;
+      })();
+
+      if (newlyPaid) {
+        const ordId = 'ORD-' + (1000 + fresh.order_seq);
+        audit(null, 'order_pay', ordId, `KHQR Verified (${triggerSource}) ${rxAmount} ${rxCurrency} · Hash ${rxHash.slice(0, 12)}...`);
+        tgSend(`✅ បង់ប្រាក់ KHQR ជោគជ័យ ${ordId}\n💰 ចំនួន: ${rxCurrency === 'KHR' ? '៛' + rxAmount.toLocaleString() : '$' + rxAmount.toFixed(2)}\n🏦 ពីគណនី: ${rxFromAccount || 'N/A'}\n🔖 Ref: ${fresh.payment_ref}\n🔗 Bakong Hash: ${rxHash.slice(0, 16)}...`);
+      }
+
+      return db.prepare('SELECT * FROM khqr_payments WHERE id = ?').get(fresh.id);
+    }
+
+    // Transaction not found yet: check if QR has expired
+    if (nowMs > expMs && fresh.status === 'pending') {
+      db.prepare("UPDATE khqr_payments SET status = 'expired', fail_reason = 'ផុតកំណត់រយៈពេលបង់ប្រាក់' WHERE id = ? AND status = 'pending'").run(fresh.id);
+    }
+
+    return db.prepare('SELECT * FROM khqr_payments WHERE id = ?').get(fresh.id);
+  } finally {
+    activeVerifications.delete(ref);
+  }
+}
+
+// Create or Regenerate Dynamic KHQR Payment Session for an Order
+function createOrderKhqrPayment(orderSeq, requestedCurrency = 'USD') {
+  const currency = requestedCurrency === 'KHR' ? 'KHR' : 'USD';
+  const accountId = getBakongAccount();
+  if (!accountId || !accountId.includes('@')) {
+    throw new HttpError(400, 'ហាងមិនទាន់បានកំណត់គណនីទទួលប្រាក់ Bakong (BAKONG_ACCOUNT_ID) នៅឡើយទេ');
+  }
+
+  return tx(() => {
+    const order = db.prepare('SELECT * FROM orders WHERE seq = ?').get(orderSeq);
+    if (!order) throw new HttpError(404, 'រកមិនឃើញការកម្ម៉ង់');
+    if (order.status === 'cancelled') throw new HttpError(409, 'ការកម្ម៉ង់នេះត្រូវបានលុបចោលហើយ');
+    if (order.pay_status === 'paid') throw new HttpError(409, 'ការកម្ម៉ង់នេះត្រូវបានបង់ប្រាក់រួចរាល់ហើយ');
+
+    // Expire any previous pending QR codes for this order
+    db.prepare("UPDATE khqr_payments SET status = 'expired', fail_reason = 'បង្កើត QR ថ្មីជំនួស' WHERE order_seq = ? AND status = 'pending'").run(orderSeq);
+
+    const rate = getRate();
+    const expectedUsd = Math.round(order.total * 100) / 100;
+    const expectedAmount = currency === 'KHR' ? khrOf(expectedUsd, rate) : expectedUsd;
+
+    const orderId = 'ORD-' + (1000 + orderSeq);
+    const paymentRef = `PAY-${1000 + orderSeq}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+    const createdMs = Date.now();
+    const expMs = createdMs + KHQR_CONFIG.ttlSeconds * 1000;
+    const expiresAtSql = new Date(expMs).toISOString().replace('T', ' ').slice(0, 19);
+
+    const khqr = generateDynamicKhqrPayload({
+      accountId,
+      merchantName: getMerchantName(),
+      merchantCity: KHQR_CONFIG.merchantCity,
+      acquiringBank: KHQR_CONFIG.acquiringBank,
+      mobileNumber: KHQR_CONFIG.merchantMobile,
+      currency,
+      amount: expectedAmount,
+      billNumber: paymentRef,
+      storeLabel: KHQR_CONFIG.merchantName,
+      terminalLabel: orderId,
+      expirationMs: expMs,
+    });
+
+    const { lastInsertRowid: id } = db.prepare(`
+      INSERT INTO khqr_payments (
+        order_seq, payment_ref, md5, qr_string, currency, expected_amount, expected_usd,
+        exchange_rate, merchant_account, environment, status, expires_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+    `).run(
+      orderSeq, paymentRef, khqr.md5, khqr.qrString, currency,
+      expectedAmount, expectedUsd, rate, accountId, KHQR_CONFIG.mode, expiresAtSql
+    );
+
+    return db.prepare('SELECT * FROM khqr_payments WHERE id = ?').get(id);
+  })();
+}
+
+async function formatPublicPaymentOut(pRow, orderRow) {
+  if (!pRow) return null;
+  const qrDataUrl = pRow.status === 'pending'
+    ? await QRCode.toDataURL(pRow.qr_string, { errorCorrectionLevel: 'M', margin: 2, width: 340 })
+    : null;
+  return {
+    orderId: 'ORD-' + (1000 + pRow.order_seq),
+    paymentRef: pRow.payment_ref,
+    md5: pRow.md5,
+    qrDataUrl,
+    currency: pRow.currency,
+    expectedAmount: pRow.expected_amount,
+    expectedUsd: pRow.expected_usd,
+    exchangeRate: pRow.exchange_rate,
+    merchantName: getMerchantName(),
+    merchantAccount: pRow.merchant_account,
+    environment: pRow.environment,
+    bakongApiConfigured: !!KHQR_CONFIG.apiToken,
+    status: pRow.status,
+    verifiedAmount: pRow.verified_amount,
+    verifiedCurrency: pRow.verified_currency,
+    bakongHash: pRow.bakong_hash ? pRow.bakong_hash.slice(0, 16) + '...' : null,
+    failReason: pRow.fail_reason,
+    createdAt: pRow.created_at.replace(' ', 'T') + 'Z',
+    expiresAt: pRow.expires_at.replace(' ', 'T') + 'Z',
+    paidAt: pRow.paid_at ? pRow.paid_at.replace(' ', 'T') + 'Z' : null,
+    orderStatus: orderRow ? orderRow.status : 'pending',
+    customerName: orderRow ? orderRow.customer_name : '',
+    tableNo: orderRow ? orderRow.table_no : '',
+  };
+}
+
+// ---- Housekeeping ----
 function expireStale() {
-  const ttl = Number(process.env.PENDING_TTL_MIN ?? 20); // 0 disables
+  // Mark expired KHQR sessions
+  db.prepare("UPDATE khqr_payments SET status = 'expired', fail_reason = 'ផុតកំណត់រយៈពេលបង់ប្រាក់' WHERE status = 'pending' AND expires_at < datetime('now')").run();
+
+  const ttl = Number(process.env.PENDING_TTL_MIN ?? 20);
   if (!(ttl > 0)) return;
   const rows = db.prepare("SELECT seq FROM orders WHERE status = 'pending' AND pay_status = 'unpaid' AND created_at < datetime('now', ?)").all(`-${ttl} minutes`);
   for (const r of rows) {
     tx(() => {
-      const o = db.prepare('SELECT status FROM orders WHERE seq = ?').get(r.seq);
-      if (!o || o.status !== 'pending') return;
+      const o = db.prepare('SELECT status, pay_status FROM orders WHERE seq = ?').get(r.seq);
+      if (!o || o.status !== 'pending' || o.pay_status === 'paid') return;
       for (const it of db.prepare('SELECT product_id, quantity FROM order_items WHERE order_seq = ?').all(r.seq)) {
         db.prepare('UPDATE products SET stock = stock + ? WHERE id = ?').run(it.quantity, it.product_id);
       }
       db.prepare("UPDATE orders SET status = 'cancelled' WHERE seq = ?").run(r.seq);
+      db.prepare("UPDATE khqr_payments SET status = 'expired', fail_reason = 'ការកម្ម៉ង់ត្រូវបានលុបស្វ័យប្រវត្តិ' WHERE order_seq = ? AND status = 'pending'").run(r.seq);
       audit(null, 'order_auto_cancel', 'ORD-' + (1000 + r.seq), `មិនទាន់ទទួលយកក្នុង ${ttl} នាទី`);
     })();
   }
 }
+
 function dailySummaryIfDue() {
   const hour = Number(process.env.SUMMARY_HOUR ?? 21);
   if (!tgOn() || !(hour >= 0 && hour <= 23)) return;
@@ -238,16 +581,20 @@ function dailySummaryIfDue() {
   tgSend(`📊 សរុបលក់ថ្ងៃនេះ (${today})\nការកម្ម៉ង់: ${s.n} (លុប ${c})\nចំណូល: $${s.rev.toFixed(2)}\nបានទទួលប្រាក់: $${s.paid.toFixed(2)}\nមិនទាន់បង់: $${(s.rev - s.paid).toFixed(2)}` +
     (top.length ? '\n🏆 ' + top.map((t) => `${t.name} ×${t.q}`).join(', ') : ''));
 }
-function maintenance() {
-  try { expireStale(); dailySummaryIfDue(); } catch (e) { console.error('maintenance:', e.message); }
+
+async function backgroundVerifyPendingKhqr() {
+  if (!KHQR_CONFIG.apiToken) return;
+  const pendingList = db.prepare("SELECT * FROM khqr_payments WHERE status = 'pending' AND expires_at >= datetime('now', '-2 minutes') ORDER BY id DESC LIMIT 15").all();
+  for (const row of pendingList) {
+    await verifyKhqrPaymentRecord(row, 'bg-worker').catch(() => {});
+  }
 }
 
-const getSetting = (k, d = '') => { const r = db.prepare('SELECT value FROM settings WHERE key = ?').get(k); return r ? r.value : d; };
-const setSetting = (k, v) => db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(k, String(v));
-const getRate = () => { const r = Number(getSetting('exchange_rate', '4100')); return r > 0 ? r : 4100; };
-const khrOf = (usd, rate) => Math.round((usd * rate) / 100) * 100; // riel, rounded to 100
+function maintenance() {
+  try { expireStale(); dailySummaryIfDue(); backgroundVerifyPendingKhqr(); } catch (e) { console.error('maintenance:', e.message); }
+}
 
-// Promo banners (managed by admin, shown on the POS home screen)
+// Promo banners
 db.exec(`
 CREATE TABLE IF NOT EXISTS banners (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -270,17 +617,14 @@ if (db.prepare('SELECT COUNT(*) AS n FROM banners').get().n === 0) {
   tx(() => defaults.forEach((d, i) => insB.run(d[0], d[1], d[2], i)))();
 }
 
-// Seed admin (first run only)
+// Seed admin
 if (db.prepare('SELECT COUNT(*) AS n FROM admins').get().n === 0) {
   const u = process.env.ADMIN_USERNAME || 'admin';
   const p = process.env.ADMIN_PASSWORD || '123456';
   db.prepare("INSERT INTO admins (username, password_hash, role, must_change) VALUES (?, ?, 'owner', ?)").run(u, bcrypt.hashSync(p, 10), process.env.ADMIN_PASSWORD ? 0 : 1);
-  if (!process.env.ADMIN_PASSWORD) {
-    console.warn('\n⚠️  Default admin created: admin / 123456 — please change the password right after first login!\n');
-  }
 }
 
-// Seed products (first run only)
+// Seed products
 if (db.prepare('SELECT COUNT(*) AS n FROM products').get().n === 0) {
   const ins = db.prepare(`INSERT INTO products (id, name, category, price, stock, status, description, image)
                           VALUES (@id, @name, @category, @price, @stock, 'active', @description, @image)`);
@@ -305,7 +649,6 @@ class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
 }
 
-// Price after discount, rounded to cents
 const finalPrice = (price, discount) => Math.round(price * (100 - (discount || 0))) / 100;
 const safeParse = (t) => { try { const v = JSON.parse(t || '[]'); return Array.isArray(v) ? v : []; } catch { return []; } };
 
@@ -319,23 +662,38 @@ function loadOrders(whereSql = '', params = []) {
   const rows = db.prepare(`SELECT * FROM orders ${whereSql} ORDER BY seq DESC`).all(...params);
   if (!rows.length) return [];
   const itemsStmt = db.prepare('SELECT name, price, quantity, sugar, note, options, kind FROM order_items WHERE order_seq = ? ORDER BY id');
-  return rows.map((o) => ({
-    id: 'ORD-' + (1000 + o.seq),
-    customerName: o.customer_name,
-    tableNo: o.table_no,
-    items: itemsStmt.all(o.seq).map((i) => ({ ...i, options: safeParse(i.options) })),
-    total: o.total,
-    status: o.status,
-    payStatus: o.pay_status,
-    payMethod: o.pay_method,
-    received: o.received,
-    receivedCur: o.received_cur,
-    changeUsd: o.change_usd,
-    rate: o.rate,
-    paidAt: o.paid_at ? o.paid_at.replace(' ', 'T') + 'Z' : null,
-    createdAt: o.created_at.replace(' ', 'T') + 'Z', // SQLite datetime('now') is UTC
-  }));
+  const khqrStmt = db.prepare('SELECT payment_ref, status, currency, expected_amount, verified_amount, bakong_hash, paid_at FROM khqr_payments WHERE order_seq = ? ORDER BY id DESC LIMIT 1');
+  return rows.map((o) => {
+    const kp = khqrStmt.get(o.seq);
+    return {
+      id: 'ORD-' + (1000 + o.seq),
+      customerName: o.customer_name,
+      tableNo: o.table_no,
+      items: itemsStmt.all(o.seq).map((i) => ({ ...i, options: safeParse(i.options) })),
+      subtotal: o.subtotal || o.total,
+      deliveryFee: o.delivery_fee || 0,
+      total: o.total,
+      status: o.status,
+      payStatus: o.pay_status,
+      payMethod: o.pay_method,
+      received: o.received,
+      receivedCur: o.received_cur,
+      changeUsd: o.change_usd,
+      rate: o.rate,
+      paidAt: o.paid_at ? o.paid_at.replace(' ', 'T') + 'Z' : null,
+      createdAt: o.created_at.replace(' ', 'T') + 'Z',
+      khqrPayment: kp ? {
+        paymentRef: kp.payment_ref,
+        status: kp.status,
+        currency: kp.currency,
+        expectedAmount: kp.expected_amount,
+        verifiedAmount: kp.verified_amount,
+        bakongHash: kp.bakong_hash,
+      } : null,
+    };
+  });
 }
+
 const seqFromOrderId = (id) => {
   const m = /^ORD-(\d+)$/.exec(String(id));
   return m ? Number(m[1]) - 1000 : NaN;
@@ -345,7 +703,6 @@ const bannerOut = (r) => ({
   id: r.id, title: r.title, subtitle: r.subtitle, image: r.image, status: r.status, sortOrder: r.sort_order,
 });
 
-// Same rule as products: only our own uploads or http(s) URLs
 function parseImage(v, required) {
   const img = String(v ?? '').trim();
   if (required && !img) throw new HttpError(400, 'សូមជ្រើសរើសរូបភាព');
@@ -360,14 +717,12 @@ function parseBanner(body) {
   if (!['active', 'inactive'].includes(body.status ?? 'active')) throw new HttpError(400, 'ស្ថានភាពមិនត្រឹមត្រូវ');
   return { title, subtitle, image: parseImage(body.image, true), status: body.status ?? 'active' };
 }
-// Delete an uploaded file only when nothing else still uses it
 function removeUploadIfUnused(img) {
   if (!img || !img.startsWith('/uploads/')) return;
   const still = db.prepare('SELECT 1 FROM products WHERE image = ? UNION SELECT 1 FROM banners WHERE image = ? UNION SELECT 1 FROM settings WHERE value = ?').get(img, img, img);
   if (!still) fs.unlink(path.join(UPLOAD_DIR, path.basename(img)), () => {});
 }
 
-// Option groups (size, ice, toppings...): [{ name, choices: [{ label, price }] }], one choice per group, first is the default
 function parseOptions(v) {
   if (v === undefined || v === null || v === '') return [];
   const arr = typeof v === 'string' ? safeParse(v) : v;
@@ -384,7 +739,6 @@ function parseOptions(v) {
   });
 }
 
-// Validation for product payloads
 function parseProduct(body, { partial = false } = {}) {
   const out = {};
   const has = (k) => body[k] !== undefined;
@@ -425,7 +779,6 @@ function parseProduct(body, { partial = false } = {}) {
   if (!partial || has('options')) out.options = JSON.stringify(parseOptions(body.options));
   if (!partial || has('image')) {
     const img = String(body.image ?? '').trim();
-    // Only allow our own uploads or http(s) URLs (blocks javascript:/data: payloads)
     if (img && !/^(\/uploads\/[\w.-]+|https?:\/\/[^\s]+)$/i.test(img)) throw new HttpError(400, 'រូបភាពមិនត្រឹមត្រូវ');
     out.image = img;
   }
@@ -438,11 +791,9 @@ function parseProduct(body, { partial = false } = {}) {
 const app = express();
 app.set('trust proxy', 1);
 app.use(helmet({ contentSecurityPolicy: false, crossOriginResourcePolicy: { policy: 'cross-origin' } }));
-// Same-origin only by default. Set CORS_ORIGIN=https://your-front-end (comma separated) to allow another site.
 if (process.env.CORS_ORIGIN) app.use(cors({ origin: process.env.CORS_ORIGIN.split(',') }));
 app.use(express.json({ limit: '100kb' }));
 
-// Auth middleware
 function requireAdmin(req, res, next) {
   const h = req.headers.authorization || '';
   const token = h.startsWith('Bearer ') ? h.slice(7) : null;
@@ -450,19 +801,16 @@ function requireAdmin(req, res, next) {
   let a;
   try {
     const payload = jwt.verify(token, JWT_SECRET);
-    // Always read role from DB so a removed user / changed role takes effect immediately
     a = db.prepare('SELECT id, username, role, must_change FROM admins WHERE id = ?').get(payload.sub);
     if (!a) throw new Error('admin removed');
   } catch {
     return next(new HttpError(401, 'Session ផុតកំណត់ សូមចូលប្រើម្តងទៀត'));
   }
   req.admin = { id: a.id, username: a.username, role: a.role, mustChange: !!a.must_change };
-  // Default password in use: nothing works except changing it
   if (req.admin.mustChange && !req.originalUrl.startsWith('/api/auth/')) return next(new HttpError(403, 'សូមប្តូរពាក្យសម្ងាត់លំនាំដើមជាមុនសិន'));
   next();
 }
 
-// Image upload
 const storage = multer.diskStorage({
   destination: UPLOAD_DIR,
   filename: (req, file, cb) => {
@@ -490,7 +838,6 @@ app.post('/api/auth/login', loginLimiter, (req, res) => {
   const username = String(req.body.username ?? '').trim();
   const password = String(req.body.password ?? '');
   const admin = db.prepare('SELECT * FROM admins WHERE username = ?').get(username);
-  // Always run a compare to keep timing similar whether or not the user exists
   const hash = admin ? admin.password_hash : '$2a$10$invalidinvalidinvalidinvalidinvalidinvalidinvalidinvali';
   const ok = bcrypt.compareSync(password, hash);
   if (!admin || !ok) { audit(null, 'login_failed', username.slice(0, 40), 'IP ' + req.ip); return res.status(401).json({ error: 'ឈ្មោះអ្នកប្រើ ឬពាក្យសម្ងាត់មិនត្រឹមត្រូវ!' }); }
@@ -514,34 +861,112 @@ app.post('/api/auth/change-password', requireAdmin, (req, res) => {
 });
 
 // ---------------- Public POS API ----------------
-// Menu for the POS screen (active products only)
 app.get('/api/products', (req, res) => {
   const rows = db.prepare(`SELECT * FROM products WHERE status = 'active' ORDER BY created_at DESC, rowid DESC`).all();
   res.json(rows.map(productOut));
 });
 
-// Public settings (exchange rate + KHQR image for paying)
 app.get('/api/settings', (req, res) => {
-  res.json({ exchangeRate: getRate(), khqrImage: getSetting('khqr_image', ''), orderingPaused: getSetting('ordering_paused', '0') === '1' });
-});
-
-// Customer order tracking: only reachable with the unguessable code returned when ordering
-const trackLimiter = rateLimit({ windowMs: 60 * 1000, max: 90, standardHeaders: true, legacyHeaders: false,
-  message: { error: 'សូមរង់ចាំបន្តិច' } });
-app.get('/api/orders/track/:code', trackLimiter, (req, res) => {
-  const code = String(req.params.code);
-  if (!/^[\w-]{8,40}$/.test(code)) throw new HttpError(404, 'រកមិនឃើញការកម្ម៉ង់');
-  const o = loadOrders('WHERE track_code = ?', [code])[0];
-  if (!o) throw new HttpError(404, 'រកមិនឃើញការកម្ម៉ង់');
-  const ahead = db.prepare("SELECT COUNT(*) AS n FROM orders WHERE status IN ('pending','preparing') AND seq < ?").get(seqFromOrderId(o.id)).n;
+  const deliveryFee = Number(getSetting('delivery_fee_usd', String(KHQR_CONFIG.deliveryFeeUsd))) || 0;
   res.json({
-    id: o.id, status: o.status, payStatus: o.payStatus, total: o.total, createdAt: o.createdAt,
-    queueAhead: (o.status === 'pending' || o.status === 'preparing') ? ahead : 0,
-    items: o.items.map((i) => ({ name: i.name, quantity: i.quantity })),
+    exchangeRate: getRate(),
+    khqrImage: getSetting('khqr_image', ''),
+    orderingPaused: getSetting('ordering_paused', '0') === '1',
+    deliveryFeeUsd: deliveryFee,
+    dynamicKhqrEnabled: !!getBakongAccount().includes('@'),
+    khqrEnvironment: KHQR_CONFIG.mode,
   });
 });
 
-// ---- Queue board (TV in the shop): order NUMBERS only, never names ----
+// Customer order tracking & payment status
+const trackLimiter = rateLimit({ windowMs: 60 * 1000, max: 90, standardHeaders: true, legacyHeaders: false,
+  message: { error: 'សូមរង់ចាំបន្តិច' } });
+
+app.get('/api/orders/track/:code', trackLimiter, asyncH(async (req, res) => {
+  const code = String(req.params.code);
+  if (!/^[\w-]{8,40}$/.test(code)) throw new HttpError(404, 'រកមិនឃើញការកម្ម៉ង់');
+  const ordRow = db.prepare('SELECT * FROM orders WHERE track_code = ?').get(code);
+  if (!ordRow) throw new HttpError(404, 'រកមិនឃើញការកម្ម៉ង់');
+
+  // If there is a pending KHQR payment, trigger a real-time check against Bakong API
+  let pRow = db.prepare('SELECT * FROM khqr_payments WHERE order_seq = ? ORDER BY id DESC LIMIT 1').get(ordRow.seq);
+  if (pRow && pRow.status === 'pending') {
+    pRow = await verifyKhqrPaymentRecord(pRow, 'track-poll');
+  }
+
+  const o = loadOrders('WHERE seq = ?', [ordRow.seq])[0];
+  const ahead = db.prepare("SELECT COUNT(*) AS n FROM orders WHERE status IN ('pending','preparing') AND seq < ?").get(ordRow.seq).n;
+  res.json({
+    id: o.id, status: o.status, payStatus: o.payStatus, total: o.total, subtotal: o.subtotal, deliveryFee: o.deliveryFee,
+    createdAt: o.createdAt,
+    queueAhead: (o.status === 'pending' || o.status === 'preparing') ? ahead : 0,
+    items: o.items.map((i) => ({ name: i.name, quantity: i.quantity })),
+    khqr: pRow ? await formatPublicPaymentOut(pRow, ordRow) : null,
+  });
+}));
+
+// Dedicated Dynamic KHQR Status & Real-Time Verification Endpoint (authenticated via customer trackCode)
+app.get('/api/payments/khqr/:trackCode', trackLimiter, asyncH(async (req, res) => {
+  const code = String(req.params.trackCode);
+  if (!/^[\w-]{8,40}$/.test(code)) throw new HttpError(404, 'រកមិនឃើញការកម្ម៉ង់');
+  const ordRow = db.prepare('SELECT * FROM orders WHERE track_code = ?').get(code);
+  if (!ordRow) throw new HttpError(404, 'រកមិនឃើញការកម្ម៉ង់');
+
+  let pRow = db.prepare('SELECT * FROM khqr_payments WHERE order_seq = ? ORDER BY id DESC LIMIT 1').get(ordRow.seq);
+  if (!pRow && ordRow.pay_status !== 'paid' && ordRow.status !== 'cancelled' && getBakongAccount().includes('@')) {
+    pRow = createOrderKhqrPayment(ordRow.seq, 'USD');
+  }
+  if (pRow && pRow.status === 'pending') {
+    pRow = await verifyKhqrPaymentRecord(pRow, 'checkout-poll');
+  }
+  const freshOrd = db.prepare('SELECT * FROM orders WHERE seq = ?').get(ordRow.seq);
+  res.json(await formatPublicPaymentOut(pRow, freshOrd));
+}));
+
+// Regenerate Dynamic KHQR (e.g. switch currency USD <-> KHR or refresh an expired QR)
+app.post('/api/payments/khqr/:trackCode/regenerate', trackLimiter, asyncH(async (req, res) => {
+  const code = String(req.params.trackCode);
+  if (!/^[\w-]{8,40}$/.test(code)) throw new HttpError(404, 'រកមិនឃើញការកម្ម៉ង់');
+  const ordRow = db.prepare('SELECT * FROM orders WHERE track_code = ?').get(code);
+  if (!ordRow) throw new HttpError(404, 'រកមិនឃើញការកម្ម៉ង់');
+
+  // Verify existing pending QR first so we never overwrite an already-paid transaction
+  const existing = db.prepare('SELECT * FROM khqr_payments WHERE order_seq = ? ORDER BY id DESC LIMIT 1').get(ordRow.seq);
+  if (existing && existing.status === 'pending') {
+    const checked = await verifyKhqrPaymentRecord(existing, 'pre-regenerate');
+    if (checked && checked.status === 'paid') {
+      const freshOrd = db.prepare('SELECT * FROM orders WHERE seq = ?').get(ordRow.seq);
+      return res.json(await formatPublicPaymentOut(checked, freshOrd));
+    }
+  }
+
+  const currency = req.body.currency === 'KHR' ? 'KHR' : 'USD';
+  const newPayment = createOrderKhqrPayment(ordRow.seq, currency);
+  const freshOrd = db.prepare('SELECT * FROM orders WHERE seq = ?').get(ordRow.seq);
+  res.status(201).json(await formatPublicPaymentOut(newPayment, freshOrd));
+}));
+
+// Official Webhook / Callback Endpoint (HMAC-SHA256 signature + server-side Bakong API cross-verification)
+app.post('/api/webhooks/khqr', asyncH(async (req, res) => {
+  if (!KHQR_CONFIG.webhookSecret) throw new HttpError(503, 'Webhook secret is not configured');
+  const sig = String(req.headers['x-khqr-signature'] || req.headers['x-webhook-signature'] || '');
+  const expectedSig = crypto.createHmac('sha256', KHQR_CONFIG.webhookSecret).update(JSON.stringify(req.body)).digest('hex');
+  if (!sig || sig.length !== expectedSig.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expectedSig))) {
+    audit(null, 'webhook_forged', req.ip, 'Invalid HMAC signature');
+    throw new HttpError(401, 'Invalid webhook signature');
+  }
+
+  const { md5, paymentRef } = req.body || {};
+  const pRow = md5
+    ? db.prepare('SELECT * FROM khqr_payments WHERE md5 = ?').get(String(md5))
+    : db.prepare('SELECT * FROM khqr_payments WHERE payment_ref = ?').get(String(paymentRef));
+  if (!pRow) throw new HttpError(404, 'Payment record not found');
+
+  // Even with a valid webhook signature, cross-verify against Bakong API before marking Paid
+  const verified = await verifyKhqrPaymentRecord(pRow, 'webhook');
+  res.json({ ok: true, status: verified ? verified.status : 'unknown' });
+}));
+
 const boardLimiter = rateLimit({ windowMs: 60 * 1000, max: 60, standardHeaders: true, legacyHeaders: false, message: { error: 'សូមរង់ចាំបន្តិច' } });
 app.get('/api/board', boardLimiter, (req, res) => {
   const rows = db.prepare(`SELECT seq, status FROM orders
@@ -553,7 +978,6 @@ app.get('/api/board', boardLimiter, (req, res) => {
   });
 });
 
-// ---- Smart upsell: what customers actually bought together (no personal data used) ----
 app.get('/api/upsell', boardLimiter, (req, res) => {
   const ids = String(req.query.ids || '').split(',').filter((x) => /^[\w-]{1,60}$/.test(x)).slice(0, 10);
   if (!ids.length) return res.json([]);
@@ -561,13 +985,13 @@ app.get('/api/upsell', boardLimiter, (req, res) => {
   const seedTotal = db.prepare(`SELECT COUNT(DISTINCT oi.order_seq) AS n FROM order_items oi JOIN orders o ON o.seq = oi.order_seq
     WHERE oi.product_id IN (${ph}) AND o.status != 'cancelled' AND o.created_at >= datetime('now','-90 days')`).get(...ids).n;
   let rows, mode;
-  if (seedTotal >= 5) { // enough history: "bought together"
+  if (seedTotal >= 5) {
     mode = 'together';
     rows = db.prepare(`SELECT oi.product_id AS id, COUNT(DISTINCT oi.order_seq) AS n FROM order_items oi
       WHERE oi.order_seq IN (SELECT oi2.order_seq FROM order_items oi2 JOIN orders o ON o.seq = oi2.order_seq
         WHERE oi2.product_id IN (${ph}) AND o.status != 'cancelled' AND o.created_at >= datetime('now','-90 days'))
       AND oi.product_id NOT IN (${ph}) GROUP BY oi.product_id HAVING n >= 2 ORDER BY n DESC LIMIT 8`).all(...ids, ...ids);
-  } else { // little history: honest fallback to best sellers, no percentages
+  } else {
     mode = 'popular';
     rows = db.prepare(`SELECT oi.product_id AS id, SUM(oi.quantity) AS n FROM order_items oi JOIN orders o ON o.seq = oi.order_seq
       WHERE o.status != 'cancelled' AND o.created_at >= datetime('now','-30 days') AND oi.product_id NOT IN (${ph})
@@ -583,39 +1007,40 @@ app.get('/api/upsell', boardLimiter, (req, res) => {
   res.json(out);
 });
 
-// Active promo banners for the POS home screen
 app.get('/api/banners', (req, res) => {
   const rows = db.prepare(`SELECT * FROM banners WHERE status = 'active' ORDER BY sort_order, id`).all();
   res.json(rows.map(bannerOut));
 });
 
-// Limit order spam from the public customer screen
 const orderLimiter = rateLimit({ windowMs: 60 * 1000, max: 15, standardHeaders: true, legacyHeaders: false,
   message: { error: 'កម្ម៉ង់ញឹកពេក សូមរង់ចាំបន្តិច' } });
 
-// Create an order from the cart. Prices/totals are computed on the server,
-// stock is checked and deducted atomically.
-// NOTE: this is the ONLY public order endpoint. Listing / updating orders is admin-only.
-app.post('/api/orders', orderLimiter, (req, res) => {
+// Checkout: Calculates authoritative total on server, creates unique Order ID & Dynamic KHQR Payment Reference
+app.post('/api/orders', orderLimiter, asyncH(async (req, res) => {
   if (getSetting('ordering_paused', '0') === '1') throw new HttpError(409, 'ហាងកំពុងផ្អាកទទួលការកម្ម៉ង់ជាបណ្តោះអាសន្ន សូមព្យាយាមម្តងទៀតបន្តិចក្រោយ');
   const customerName = String(req.body.customerName ?? '').trim().slice(0, 80) || 'អតិថិជនទូទៅ';
   const tableNo = String(req.body.tableNo ?? '').trim().slice(0, 40) || 'តុទូទៅ';
+  const currency = req.body.currency === 'KHR' ? 'KHR' : 'USD';
+  const isDelivery = !!req.body.isDelivery;
   const items = Array.isArray(req.body.items) ? req.body.items : [];
   if (!items.length || items.length > 50) throw new HttpError(400, 'កន្ត្រកទទេ ឬធំពេក');
+
   const perIp = Number(process.env.PENDING_PER_IP ?? 10);
   if (perIp > 0 && db.prepare("SELECT COUNT(*) AS n FROM orders WHERE ip = ? AND status = 'pending'").get(req.ip || '').n >= perIp)
     throw new HttpError(429, 'មានការកម្ម៉ង់កំពុងរង់ចាំច្រើនពេក សូមរង់ចាំបុគ្គលិកទទួលយកជាមុន');
 
   const getProduct = db.prepare('SELECT * FROM products WHERE id = ?');
   const decStock = db.prepare('UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?');
-  const trackCode = crypto.randomBytes(9).toString('base64url');
-  const insOrder = db.prepare('INSERT INTO orders (customer_name, table_no, total, track_code, ip) VALUES (?, ?, 0, ?, ?)');
+  const trackCode = crypto.randomBytes(12).toString('base64url');
+  const insOrder = db.prepare('INSERT INTO orders (customer_name, table_no, subtotal, delivery_fee, total, track_code, ip) VALUES (?, ?, 0, 0, 0, ?, ?)');
   const insItem = db.prepare('INSERT INTO order_items (order_seq, product_id, name, price, quantity, sugar, note, options, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
-  const setTotal = db.prepare('UPDATE orders SET total = ? WHERE seq = ?');
+  const setTotals = db.prepare('UPDATE orders SET subtotal = ?, delivery_fee = ?, total = ? WHERE seq = ?');
+
+  const configuredDeliveryFee = Number(getSetting('delivery_fee_usd', String(KHQR_CONFIG.deliveryFeeUsd))) || 0;
 
   const create = tx(() => {
     const { lastInsertRowid: seq } = insOrder.run(customerName, tableNo, trackCode, req.ip || '');
-    let total = 0;
+    let subtotal = 0;
     for (const it of items) {
       const qty = Number(it.quantity);
       if (!Number.isInteger(qty) || qty < 1 || qty > 99) throw new HttpError(400, 'ចំនួនមិនត្រឹមត្រូវ');
@@ -623,12 +1048,11 @@ app.post('/api/orders', orderLimiter, (req, res) => {
       if (!p || p.status !== 'active') throw new HttpError(409, `ទំនិញ "${it.name ?? it.id}" មិនមានលក់ទៀតទេ`);
       if (decStock.run(qty, p.id, qty).changes === 0) throw new HttpError(409, `ទំនិញ "${p.name}" អស់ស្តុក ឬមិនគ្រប់ចំនួន (នៅសល់ ${p.stock})`);
       const food = FOOD_CATS.includes(p.category);
-      const sugar = food ? '' : String(it.sugar ?? '').slice(0, 20); // food never carries a sugar level
+      const sugar = food ? '' : String(it.sugar ?? '').slice(0, 20);
       const note = String(it.note ?? '').replace(/\s+/g, ' ').trim().slice(0, 100);
-      // chosen options are re-validated against the product's own option groups; price delta comes from the server
       const picked = Array.isArray(it.options) ? it.options : [], chosen = [];
       for (const g of safeParse(p.options)) {
-        if (g.multi) { // add-ons: zero or more, each validated against the product's own list, no duplicates
+        if (g.multi) {
           const seen = new Set();
           for (const w of picked.filter((x) => x && x.group === g.name)) {
             const c = g.choices.find((x) => x.label === w.label);
@@ -646,27 +1070,97 @@ app.post('/api/orders', orderLimiter, (req, res) => {
       }
       const unit = Math.round((finalPrice(p.price, p.discount) + chosen.reduce((n, c) => n + c.price, 0)) * 100) / 100;
       insItem.run(seq, p.id, p.name, unit, qty, sugar, note, JSON.stringify(chosen), food ? 'food' : 'drink');
-      total += unit * qty;
+      subtotal += unit * qty;
     }
-    total = Math.round(total * 100) / 100;
-    setTotal.run(total, seq);
+    subtotal = Math.round(subtotal * 100) / 100;
+    const deliveryFee = isDelivery ? Math.round(configuredDeliveryFee * 100) / 100 : 0;
+    const total = Math.round((subtotal + deliveryFee) * 100) / 100;
+    setTotals.run(subtotal, deliveryFee, total, seq);
     return seq;
   });
 
   const seq = create();
+  let khqrRow = null;
+  if (getBakongAccount().includes('@')) {
+    try { khqrRow = createOrderKhqrPayment(seq, currency); } catch (e) { console.error('KHQR init warning:', e.message); }
+  }
+
   const created = loadOrders('WHERE seq = ?', [seq])[0];
+  const ordRow = db.prepare('SELECT * FROM orders WHERE seq = ?').get(seq);
   tgAfterOrder(created, items);
-  res.status(201).json({ ...created, trackCode });
-});
+  res.status(201).json({
+    ...created,
+    trackCode,
+    khqr: khqrRow ? await formatPublicPaymentOut(khqrRow, ordRow) : null,
+  });
+}));
 
 // ---------------- Admin API (JWT required) ----------------
 const admin = express.Router();
 admin.use(requireAdmin);
-// Roles: 'owner' can do everything; 'cashier' can only work with orders (view, status, payment)
 admin.use((req, res, next) => {
-  if (req.admin.role === 'owner' || req.path.startsWith('/orders') || req.path === '/ordering' || req.path.startsWith('/shifts')) return next();
+  if (req.admin.role === 'owner' || req.path.startsWith('/orders') || req.path.startsWith('/khqr-payments') || req.path === '/ordering' || req.path.startsWith('/shifts')) return next();
   next(new HttpError(403, 'មុខងារនេះសម្រាប់ម្ចាស់ហាងប៉ុណ្ណោះ'));
 });
+
+// Admin KHQR Payments Dashboard & Manual Re-Verification
+admin.get('/khqr-payments', (req, res) => {
+  const status = String(req.query.status || 'all');
+  const limit = Math.min(Number(req.query.limit) || 200, 500);
+  const where = ['pending', 'paid', 'failed', 'expired'].includes(status) ? 'WHERE kp.status = ?' : '';
+  const params = where ? [status, limit] : [limit];
+
+  const rows = db.prepare(`
+    SELECT kp.*, o.customer_name, o.table_no, o.status AS order_status, o.pay_status
+    FROM khqr_payments kp
+    JOIN orders o ON o.seq = kp.order_seq
+    ${where}
+    ORDER BY kp.id DESC
+    LIMIT ?
+  `).all(...params);
+
+  res.json({
+    config: {
+      mode: KHQR_CONFIG.mode,
+      apiBase: KHQR_CONFIG.apiBase,
+      apiTokenConfigured: !!KHQR_CONFIG.apiToken,
+      merchantAccount: getBakongAccount(),
+      merchantName: getMerchantName(),
+    },
+    payments: rows.map((r) => ({
+      id: r.id,
+      orderId: 'ORD-' + (1000 + r.order_seq),
+      customerName: r.customer_name,
+      tableNo: r.table_no,
+      paymentRef: r.payment_ref,
+      md5: r.md5,
+      currency: r.currency,
+      expectedAmount: r.expected_amount,
+      expectedUsd: r.expected_usd,
+      verifiedAmount: r.verified_amount,
+      verifiedCurrency: r.verified_currency,
+      bakongHash: r.bakong_hash,
+      fromAccountId: r.from_account_id,
+      toAccountId: r.to_account_id,
+      environment: r.environment,
+      status: r.status,
+      failReason: r.fail_reason,
+      checkCount: r.check_count,
+      createdAt: r.created_at.replace(' ', 'T') + 'Z',
+      expiresAt: r.expires_at.replace(' ', 'T') + 'Z',
+      paidAt: r.paid_at ? r.paid_at.replace(' ', 'T') + 'Z' : null,
+    })),
+  });
+});
+
+admin.post('/khqr-payments/:paymentRef/verify', asyncH(async (req, res) => {
+  const ref = String(req.params.paymentRef);
+  const pRow = db.prepare('SELECT * FROM khqr_payments WHERE payment_ref = ?').get(ref);
+  if (!pRow) throw new HttpError(404, 'រកមិនឃើញកំណត់ត្រាការបង់ប្រាក់នេះទេ');
+  if (!KHQR_CONFIG.apiToken) throw new HttpError(400, 'មិនទាន់បានកំណត់ BAKONG_API_TOKEN ក្នុង Server (.env) ទេ');
+  const updated = await verifyKhqrPaymentRecord(pRow, 'admin-manual');
+  res.json({ ok: true, status: updated.status, verifiedAmount: updated.verified_amount, bakongHash: updated.bakong_hash, failReason: updated.fail_reason });
+}));
 
 admin.get('/products', (req, res) => {
   const rows = db.prepare('SELECT * FROM products ORDER BY created_at DESC, rowid DESC').all();
@@ -688,11 +1182,10 @@ admin.put('/products/:id', (req, res) => {
   const data = parseProduct(req.body);
   db.prepare(`UPDATE products SET name=@name, category=@category, price=@price, discount=@discount, stock=@stock,
               status=@status, description=@description, image=@image, options=@options WHERE id=@id`).run({ id: req.params.id, ...data });
-  audit(req, 'product_update', req.params.id, `${existing.name}: $${existing.price}→$${data.price}, ស្តុក ${existing.stock}→${data.stock}, បញ្ចុះ ${existing.discount || 0}→${data.discount}%, ${existing.status}→${data.status}`);
+  audit(req, 'product_update', req.params.id, `${existing.name}: $${existing.price}→$${data.price}, ស្តុក ${existing.stock}→${data.stock}`);
   res.json(productOut(db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id)));
 });
 
-// Partial update (status toggle, stock changes, etc.)
 admin.patch('/products/:id', (req, res) => {
   const existing = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
   if (!existing) throw new HttpError(404, 'រកមិនឃើញទំនិញ');
@@ -704,7 +1197,6 @@ admin.patch('/products/:id', (req, res) => {
   res.json(productOut(db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id)));
 });
 
-// Atomic stock adjustment (+/-), avoids lost updates when two staff click at once
 admin.post('/products/:id/stock', (req, res) => {
   const delta = Number(req.body.delta);
   if (!Number.isInteger(delta) || Math.abs(delta) > 100000) throw new HttpError(400, 'delta មិនត្រឹមត្រូវ');
@@ -719,11 +1211,7 @@ admin.delete('/products/:id', (req, res) => {
   if (!p) throw new HttpError(404, 'រកមិនឃើញទំនិញ');
   db.prepare('DELETE FROM products WHERE id = ?').run(req.params.id);
   audit(req, 'product_delete', req.params.id, p.name);
-  // Remove the uploaded file if it was ours and nothing else uses it
-  if (p.image.startsWith('/uploads/')) {
-    const still = db.prepare('SELECT 1 FROM products WHERE image = ? UNION SELECT 1 FROM banners WHERE image = ? UNION SELECT 1 FROM settings WHERE value = ?').get(p.image, p.image, p.image);
-    if (!still) fs.unlink(path.join(UPLOAD_DIR, path.basename(p.image)), () => {});
-  }
+  if (p.image.startsWith('/uploads/')) removeUploadIfUnused(p.image);
   res.json({ ok: true });
 });
 
@@ -733,24 +1221,16 @@ admin.post('/upload', upload.single('image'), (req, res) => {
 });
 
 admin.get('/stats', (req, res) => {
-  const p = db.prepare(`SELECT COUNT(*) AS total,
-      SUM(status='active') AS active,
-      SUM(stock = 0) AS outOfStock,
-      SUM(stock > 0 AND stock <= 10) AS lowStock
-    FROM products`).get();
-  const o = db.prepare(`SELECT COUNT(*) AS orders, COALESCE(SUM(total),0) AS revenue
-    FROM orders WHERE status != 'cancelled' AND date(created_at) = date('now')`).get();
+  const p = db.prepare(`SELECT COUNT(*) AS total, SUM(status='active') AS active, SUM(stock = 0) AS outOfStock, SUM(stock > 0 AND stock <= 10) AS lowStock FROM products`).get();
+  const o = db.prepare(`SELECT COUNT(*) AS orders, COALESCE(SUM(total),0) AS revenue FROM orders WHERE status != 'cancelled' AND date(created_at) = date('now')`).get();
   res.json({
     products: { total: p.total, active: p.active || 0, outOfStock: p.outOfStock || 0, lowStock: p.lowStock || 0 },
     today: { orders: o.orders, revenue: Math.round(o.revenue * 100) / 100 },
   });
 });
 
-// ---------------- Admin: Banners (JWT required) ----------------
-admin.get('/banners', (req, res) => {
-  res.json(db.prepare('SELECT * FROM banners ORDER BY sort_order, id').all().map(bannerOut));
-});
-
+// Banners
+admin.get('/banners', (req, res) => res.json(db.prepare('SELECT * FROM banners ORDER BY sort_order, id').all().map(bannerOut)));
 admin.post('/banners', (req, res) => {
   if (db.prepare('SELECT COUNT(*) AS n FROM banners').get().n >= 20) throw new HttpError(400, 'Banner ច្រើនពេក (អតិបរមា 20)');
   const d = parseBanner(req.body);
@@ -759,7 +1239,6 @@ admin.post('/banners', (req, res) => {
     .run(d.title, d.subtitle, d.image, d.status, next);
   res.status(201).json(bannerOut(db.prepare('SELECT * FROM banners WHERE id = ?').get(id)));
 });
-
 admin.put('/banners/:id', (req, res) => {
   const id = Number(req.params.id);
   const old = db.prepare('SELECT * FROM banners WHERE id = ?').get(id);
@@ -769,7 +1248,6 @@ admin.put('/banners/:id', (req, res) => {
   if (old.image !== d.image) removeUploadIfUnused(old.image);
   res.json(bannerOut(db.prepare('SELECT * FROM banners WHERE id = ?').get(id)));
 });
-
 admin.patch('/banners/:id', (req, res) => {
   const id = Number(req.params.id);
   if (!['active', 'inactive'].includes(req.body.status)) throw new HttpError(400, 'ស្ថានភាពមិនត្រឹមត្រូវ');
@@ -777,7 +1255,6 @@ admin.patch('/banners/:id', (req, res) => {
   if (!r.changes) throw new HttpError(404, 'រកមិនឃើញ Banner');
   res.json(bannerOut(db.prepare('SELECT * FROM banners WHERE id = ?').get(id)));
 });
-
 admin.post('/banners/:id/move', (req, res) => {
   const id = Number(req.params.id);
   const dir = Number(req.body.dir) < 0 ? -1 : 1;
@@ -794,7 +1271,6 @@ admin.post('/banners/:id/move', (req, res) => {
   })();
   res.json({ ok: true });
 });
-
 admin.delete('/banners/:id', (req, res) => {
   const id = Number(req.params.id);
   const b = db.prepare('SELECT * FROM banners WHERE id = ?').get(id);
@@ -804,7 +1280,7 @@ admin.delete('/banners/:id', (req, res) => {
   res.json({ ok: true });
 });
 
-// ---------------- Admin: Orders (JWT required) ----------------
+// Orders
 admin.get('/orders', (req, res) => {
   const { status } = req.query;
   const limit = Math.min(Number(req.query.limit) || 200, 1000);
@@ -830,7 +1306,7 @@ admin.patch('/orders/:id/status', (req, res) => {
       throw new HttpError(409, o.status === 'cancelled' ? 'ការកម្ម៉ង់ដែលបានបោះបង់ មិនអាចបើកឡើងវិញបានទេ' : 'មិនអាចប្តូរស្ថានភាពថយក្រោយបានទេ');
     }
     if (status === 'cancelled') {
-      const risky = o.pay_status === 'paid' || o.status === 'completed'; // money taken or drink already served
+      const risky = o.pay_status === 'paid' || o.status === 'completed';
       if (risky) {
         if (req.admin.role !== 'owner') throw new HttpError(403, 'ការលុបការកម្ម៉ង់ដែលបានបង់ប្រាក់ ឬបម្រើរួច ត្រូវការម្ចាស់ហាង');
         if (reason.length < 3) throw new HttpError(400, 'សូមបញ្ចូលមូលហេតុនៃការលុប/សងប្រាក់');
@@ -840,6 +1316,7 @@ admin.patch('/orders/:id/status', (req, res) => {
         db.prepare('UPDATE products SET stock = stock + ? WHERE id = ?').run(it.quantity, it.product_id);
       }
       db.prepare("UPDATE orders SET pay_status = 'refunded' WHERE seq = ? AND pay_status = 'paid'").run(seq);
+      db.prepare("UPDATE khqr_payments SET status = 'expired', fail_reason = 'ការកម្ម៉ង់ត្រូវបានលុបចោល' WHERE order_seq = ? AND status = 'pending'").run(seq);
     }
     prev = o.status;
     db.prepare("UPDATE orders SET status = ?, status_at = datetime('now') WHERE seq = ?").run(status, seq);
@@ -851,11 +1328,22 @@ admin.patch('/orders/:id/status', (req, res) => {
   res.json(loadOrders('WHERE seq = ?', [seq])[0]);
 });
 
-// ---------------- Admin: payment ----------------
-admin.post('/orders/:id/pay', (req, res) => {
+// Admin Cashier Payment: Cash / Other (KHQR requires Bakong API verification unless verified hash exists)
+admin.post('/orders/:id/pay', asyncH(async (req, res) => {
   const seq = seqFromOrderId(req.params.id);
   const method = String(req.body.method ?? '');
   if (!['cash', 'khqr', 'other'].includes(method)) throw new HttpError(400, 'របៀបបង់ប្រាក់មិនត្រឹមត្រូវ');
+
+  if (method === 'khqr') {
+    const pRow = db.prepare('SELECT * FROM khqr_payments WHERE order_seq = ? ORDER BY id DESC LIMIT 1').get(seq);
+    if (!pRow) throw new HttpError(400, 'មិនទាន់មានកូដ Dynamic KHQR សម្រាប់ការកម្ម៉ង់នេះទេ');
+    const verified = await verifyKhqrPaymentRecord(pRow, 'cashier-check');
+    if (!verified || verified.status !== 'paid') {
+      throw new HttpError(409, 'ការបង់ប្រាក់តាម KHQR មិនទាន់ត្រូវបានផ្ទៀងផ្ទាត់ពីប្រព័ន្ធ Bakong នៅឡើយទេ។ មិនអាចកំណត់ថាបានបង់ប្រាក់ដោយគ្មានការផ្ទៀងផ្ទាត់ឡើយ។');
+    }
+    return res.json(loadOrders('WHERE seq = ?', [seq])[0]);
+  }
+
   let cur = req.body.currency === 'KHR' ? 'KHR' : 'USD';
   let received = Number(req.body.received);
   tx(() => {
@@ -871,36 +1359,61 @@ admin.post('/orders/:id/pay', (req, res) => {
         if (received + 0.005 < o.total) throw new HttpError(400, 'ប្រាក់ទទួលមិនគ្រប់');
         changeUsd = Math.max(0, Math.round((received - o.total) * 100) / 100);
       } else {
-        const need = khrOf(o.total, rate);          // riel total shown to the customer
+        const need = khrOf(o.total, rate);
         if (received < need) throw new HttpError(400, 'ប្រាក់ទទួលមិនគ្រប់');
-        changeUsd = (received - need) / rate;       // change is given back in riel
+        changeUsd = (received - need) / rate;
       }
     } else { cur = 'USD'; received = o.total; }
     db.prepare("UPDATE orders SET pay_status = 'paid', pay_method = ?, received = ?, received_cur = ?, change_usd = ?, rate = ?, paid_at = datetime('now') WHERE seq = ?")
       .run(method, received, cur, changeUsd, rate, seq);
+    db.prepare("UPDATE khqr_payments SET status = 'expired', fail_reason = 'បានបង់ប្រាក់តាមសាច់ប្រាក់' WHERE order_seq = ? AND status = 'pending'").run(seq);
   })();
   audit(req, 'order_pay', req.params.id, `${method} ${method === 'cash' ? received + ' ' + cur : ''}`.trim());
   res.json(loadOrders('WHERE seq = ?', [seq])[0]);
+}));
+
+// Settings
+admin.get('/settings', (req, res) => {
+  res.json({
+    exchangeRate: getRate(),
+    khqrImage: getSetting('khqr_image', ''),
+    bakongAccountId: getBakongAccount(),
+    bakongMerchantName: getMerchantName(),
+    deliveryFeeUsd: Number(getSetting('delivery_fee_usd', String(KHQR_CONFIG.deliveryFeeUsd))) || 0,
+    khqrMode: KHQR_CONFIG.mode,
+    bakongTokenConfigured: !!KHQR_CONFIG.apiToken,
+  });
 });
 
-// ---------------- Admin: settings ----------------
-admin.get('/settings', (req, res) => {
-  res.json({ exchangeRate: getRate(), khqrImage: getSetting('khqr_image', '') });
-});
 admin.put('/settings', (req, res) => {
   const rate = Number(req.body.exchangeRate);
   if (!Number.isFinite(rate) || rate < 100 || rate > 100000) throw new HttpError(400, 'អត្រាប្តូរប្រាក់មិនត្រឹមត្រូវ');
   const oldQr = getSetting('khqr_image', '');
   const qr = parseImage(req.body.khqrImage, false);
+  const bakongAcc = String(req.body.bakongAccountId ?? getBakongAccount()).trim();
+  if (bakongAcc && !/^[\w.-]+@[\w.-]+$/.test(bakongAcc)) throw new HttpError(400, 'គណនី Bakong មិនត្រឹមត្រូវ (ឧ. name@aba)');
+  const merchantName = String(req.body.bakongMerchantName ?? getMerchantName()).trim().slice(0, 25);
+  const deliveryFee = Math.max(Number(req.body.deliveryFeeUsd ?? 0) || 0, 0);
+
   const oldRate = getRate();
   setSetting('exchange_rate', rate);
   setSetting('khqr_image', qr);
-  audit(req, 'settings', '', `អត្រា ${oldRate}→${rate}${oldQr !== qr ? ', ប្តូររូប KHQR' : ''}`);
+  if (req.body.bakongAccountId !== undefined) setSetting('bakong_account_id', bakongAcc);
+  if (req.body.bakongMerchantName !== undefined) setSetting('bakong_merchant_name', merchantName);
+  if (req.body.deliveryFeeUsd !== undefined) setSetting('delivery_fee_usd', deliveryFee);
+
+  audit(req, 'settings', '', `អត្រា ${oldRate}→${rate}, Bakong: ${bakongAcc}`);
   if (oldQr && oldQr !== qr) removeUploadIfUnused(oldQr);
-  res.json({ exchangeRate: getRate(), khqrImage: getSetting('khqr_image', '') });
+  res.json({
+    exchangeRate: getRate(),
+    khqrImage: getSetting('khqr_image', ''),
+    bakongAccountId: getBakongAccount(),
+    bakongMerchantName: getMerchantName(),
+    deliveryFeeUsd: Number(getSetting('delivery_fee_usd', '0')) || 0,
+  });
 });
 
-// ---------------- Admin: reports ----------------
+// Reports
 function reportRange(q) {
   const ok = (d) => /^\d{4}-\d{2}-\d{2}$/.test(String(d)) && !Number.isNaN(Date.parse(d));
   const today = db.prepare('SELECT date(\'now\', ?) AS d').get(TZ_MOD).d;
@@ -945,7 +1458,7 @@ admin.get('/reports', (req, res) => {
 admin.get('/reports/export', (req, res) => {
   const { from, to } = reportRange(req.query);
   const rows = loadOrders('WHERE date(created_at, ?) BETWEEN ? AND ?', [TZ_MOD, from, to]).reverse();
-  const q = (v) => { // neutralise spreadsheet formulas (=, +, -, @) in text typed by customers
+  const q = (v) => {
     let t = String(v ?? '');
     if (typeof v === 'string' && /^[=+\-@\t\r]/.test(t)) t = "'" + t;
     return '"' + t.replace(/"/g, '""') + '"';
@@ -964,14 +1477,14 @@ admin.get('/reports/export', (req, res) => {
   }
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="sales-${from}_${to}.csv"`);
-  res.send('\ufeff' + lines.join('\r\n')); // BOM so Excel reads Khmer correctly
+  res.send('\ufeff' + lines.join('\r\n'));
 });
 
-// ---------------- Admin: backups ----------------
+// Backups
 function makeBackup(kind) {
   const stamp = new Date().toISOString().replace(/\D/g, '').slice(0, 14);
   const name = `mlob-${kind}-${stamp}.db`;
-  db.prepare('VACUUM INTO ?').run(path.join(BACKUP_DIR, name)); // consistent snapshot, safe while the DB is in use
+  db.prepare('VACUUM INTO ?').run(path.join(BACKUP_DIR, name));
   return name;
 }
 function listBackups() {
@@ -987,7 +1500,7 @@ function autoBackup() {
       const n = makeBackup('auto');
       tgSendFile(path.join(BACKUP_DIR, n), '💾 Backup ' + n);
     }
-    for (const b of listBackups().slice(7)) fs.unlink(path.join(BACKUP_DIR, b.name), () => {}); // keep the newest 7
+    for (const b of listBackups().slice(7)) fs.unlink(path.join(BACKUP_DIR, b.name), () => {});
   } catch (e) { console.error('Auto-backup failed:', e.message); }
 }
 
@@ -1004,13 +1517,11 @@ admin.get('/backups/:name', (req, res) => {
   res.download(path.join(BACKUP_DIR, name), name);
 });
 
-// ---------------- Admin: users & roles (owner only via the gate above) ----------------
+// Users & Roles
 const ROLES = ['owner', 'cashier'];
 const ownersCount = () => db.prepare("SELECT COUNT(*) AS n FROM admins WHERE role = 'owner'").get().n;
 
-admin.get('/users', (req, res) => {
-  res.json(db.prepare('SELECT id, username, role, created_at FROM admins ORDER BY id').all());
-});
+admin.get('/users', (req, res) => res.json(db.prepare('SELECT id, username, role, created_at FROM admins ORDER BY id').all()));
 admin.post('/users', (req, res) => {
   const username = String(req.body.username ?? '').trim();
   const password = String(req.body.password ?? '');
@@ -1051,7 +1562,6 @@ admin.delete('/users/:id', (req, res) => {
   res.json({ ok: true });
 });
 
-// ---------------- Pause / resume customer ordering ----------------
 admin.put('/ordering', (req, res) => {
   const paused = !!req.body.paused;
   setSetting('ordering_paused', paused ? '1' : '0');
@@ -1060,11 +1570,10 @@ admin.put('/ordering', (req, res) => {
   res.json({ orderingPaused: paused });
 });
 
-// ---------------- Cash drawer shifts (cashier + owner) ----------------
+// Shifts
 const isoDt = (d) => d.replace(' ', 'T') + 'Z';
 const cash = (v) => { const n = Number(v ?? 0); if (!Number.isFinite(n) || n < 0 || n > 1e9) throw new HttpError(400, 'ចំនួនលុយមិនត្រឹមត្រូវ'); return n; };
 function shiftExpected(sh) {
-  // Cash sales in the shift. Assumes change is returned in the same currency that was received.
   let usd = 0, khr = 0, n = 0;
   for (const o of db.prepare("SELECT total, rate, received_cur FROM orders WHERE pay_method = 'cash' AND pay_status = 'paid' AND paid_at >= ? AND paid_at <= ?").all(sh.opened_at, sh.closed_at || '9999')) {
     n++;
@@ -1097,11 +1606,10 @@ admin.post('/shifts/close', (req, res) => {
     .run(req.admin.username, cu, ck, e.expUsd, e.expKhr, note, sh.id);
   const dU = Math.round((cu - e.expUsd) * 100) / 100, dK = ck - e.expKhr;
   audit(req, 'shift_close', '#' + sh.id, `USD ${dU >= 0 ? '+' : ''}${dU}, KHR ${dK >= 0 ? '+' : ''}${dK}${note ? ' · ' + note : ''}`);
-  tgSend(`💵 បិទវេន #${sh.id} ដោយ ${req.admin.username}\nUSD: រំពឹង $${e.expUsd} រាប់បាន $${cu} (${dU === 0 ? 'ត្រូវ' : dU > 0 ? 'លើស $' + dU : 'ខ្វះ $' + (-dU)})\nKHR: រំពឹង ៛${e.expKhr} រាប់បាន ៛${ck} (${dK === 0 ? 'ត្រូវ' : dK > 0 ? 'លើស ៛' + dK : 'ខ្វះ ៛' + (-dK)})`);
   res.json(shiftOut(db.prepare('SELECT * FROM shifts WHERE id = ?').get(sh.id)));
 });
 
-// ---------------- Restore from a backup file (owner only) ----------------
+// Restore
 const restoreUpload = multer({ dest: path.join(DATA_DIR, 'tmp'), limits: { fileSize: 200 * 1024 * 1024, files: 1 } });
 admin.post('/restore', restoreUpload.single('file'), (req, res) => {
   if (!req.file) throw new HttpError(400, 'សូមជ្រើសរើសឯកសារ Backup (.db)');
@@ -1117,8 +1625,8 @@ admin.post('/restore', restoreUpload.single('file'), (req, res) => {
       for (const t of ['products', 'orders', 'order_items', 'admins']) if (!have.has(t)) throw new HttpError(400, `Backup មិនមានតារាង ${t}`);
       if (db.prepare('PRAGMA rs.integrity_check').get().integrity_check !== 'ok') throw new HttpError(400, 'ឯកសារ Backup ខូច');
       if (db.prepare('SELECT COUNT(*) AS n FROM rs.admins').get().n < 1) throw new HttpError(400, 'Backup មិនមានគណនី Admin');
-      makeBackup('prerestore'); // safety copy of what is being replaced
-      const tables = ['order_items', 'orders', 'products', 'banners', 'settings', 'admins'].filter((t) => have.has(t)); // children first
+      makeBackup('prerestore');
+      const tables = ['khqr_payments', 'order_items', 'orders', 'products', 'banners', 'settings', 'admins'].filter((t) => have.has(t));
       tx(() => {
         for (const t of tables) db.exec(`DELETE FROM main.${t}`);
         for (const t of [...tables].reverse()) {
@@ -1129,9 +1637,8 @@ admin.post('/restore', restoreUpload.single('file'), (req, res) => {
           restored[t] = db.prepare(`SELECT COUNT(*) AS n FROM main.${t}`).get().n;
         }
       })();
-    } finally { try { db.exec('DETACH DATABASE rs'); } catch (_) { /* not attached */ } }
+    } finally { try { db.exec('DETACH DATABASE rs'); } catch (_) {} }
     audit(req, 'restore', String(req.file.originalname).slice(0, 60), JSON.stringify(restored));
-    tgSend('♻️ ស្តារទិន្នន័យពី Backup ដោយ ' + req.admin.username + '\n' + JSON.stringify(restored));
     res.json({ ok: true, restored });
   } finally { fs.unlink(tmp, () => {}); }
 });
@@ -1156,7 +1663,6 @@ app.use(express.static(PUBLIC_DIR));
 
 app.use('/api', (req, res) => res.status(404).json({ error: 'រកមិនឃើញ API នេះទេ' }));
 
-// ---------------- Errors ----------------
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
   if (err instanceof multer.MulterError) {
@@ -1169,10 +1675,10 @@ app.use((err, req, res, next) => {
 });
 
 if (require.main === module) {
-  autoBackup();                                   // on start (skipped if one exists from the last 20h)
-  setInterval(autoBackup, 6 * 3600e3).unref();    // then check every 6h
+  autoBackup();
+  setInterval(autoBackup, 6 * 3600e3).unref();
   maintenance();
-  setInterval(maintenance, Number(process.env.MAINT_MS) || 60e3).unref(); // auto-cancel stale orders, daily Telegram summary
-  app.listen(PORT, () => console.log(`☕ Mlob Doung Coffee running on http://localhost:${PORT}`));
+  setInterval(maintenance, Number(process.env.MAINT_MS) || 30e3).unref();
+  app.listen(PORT, () => console.log(`☕ Mlob Doung Coffee running on http://localhost:${PORT} [KHQR Mode: ${KHQR_CONFIG.mode.toUpperCase()}]`));
 }
 module.exports = app;
