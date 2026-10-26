@@ -11,8 +11,8 @@ const rateLimit = require('express-rate-limit');
 const multer = require('multer');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
-const { buildDynamicKhqr, md5Of } = require('./khqr');
-const { checkTransactionByMd5, tokenInfo } = require('./bakong');
+const { BakongKHQR, khqrData, IndividualInfo, MerchantInfo } = require('bakong-khqr');
+const QRCode = require('qrcode');
 let DatabaseSync;
 try {
   ({ DatabaseSync } = require('node:sqlite'));
@@ -25,8 +25,8 @@ try {
 // Config
 // ---------------------------------------------------------------
 const PORT = process.env.PORT || 3000;
-const DATA_DIR = path.join(__dirname, 'data');
-const UPLOAD_DIR = path.join(__dirname, 'uploads');
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');   // e.g. /var/data/db on a Render disk
+const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, 'uploads'); // e.g. /var/data/uploads
 const PUBLIC_DIR = path.join(__dirname, 'public');
 fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
@@ -47,31 +47,9 @@ const TZ_MOD = `${TZ_HOURS >= 0 ? '+' : '-'}${Math.abs(TZ_HOURS)} hours`;
 const BACKUP_DIR = path.join(DATA_DIR, 'backups');
 fs.mkdirSync(BACKUP_DIR, { recursive: true });
 
-// ---- KHQR checkout / Bakong verification (all secrets come from environment variables only) ----
-const BAKONG_ENV = String(process.env.BAKONG_ENV || 'sandbox').toLowerCase() === 'production' ? 'production' : 'sandbox';
-const BAKONG = {
-  env: BAKONG_ENV,
-  token: process.env.BAKONG_TOKEN || '',
-  baseUrl: process.env.BAKONG_BASE_URL || (BAKONG_ENV === 'production' ? 'https://api-bakong.nbc.gov.kh' : 'https://sit-api-bakong.nbc.gov.kh'),
-  accountType: String(process.env.BAKONG_ACCOUNT_TYPE || 'individual').toLowerCase() === 'merchant' ? 'merchant' : 'individual',
-  accountId: process.env.BAKONG_ACCOUNT_ID || '',                       // e.g. name@bank (decoded from your static KHQR)
-  accountInfo: { USD: process.env.BAKONG_ACCOUNT_INFO_USD || '', KHR: process.env.BAKONG_ACCOUNT_INFO_KHR || '' },
-  acquiringBank: process.env.BAKONG_ACQUIRING_BANK || '',
-  merchantId: process.env.BAKONG_MERCHANT_ID || '',
-  merchantName: process.env.BAKONG_MERCHANT_NAME || '',                 // exactly as shown on your static QR
-  merchantCity: process.env.BAKONG_MERCHANT_CITY || 'Phnom Penh',
-  mcc: process.env.BAKONG_MCC || '5999',
-  storeLabel: process.env.BAKONG_STORE_LABEL || '',
-  expectToAccount: process.env.BAKONG_EXPECT_TO_ACCOUNT || '',          // optional strict check of toAccountId
-  expireMinutes: Math.max(1, Number(process.env.KHQR_EXPIRE_MINUTES) || 10),
-  graceMinutes: Math.max(1, Number(process.env.KHQR_GRACE_MINUTES) || 5),
-  holdMinutes: Math.max(1, Number(process.env.KHQR_ORDER_HOLD_MINUTES) || 15),
-};
-
-// Two menu sections: drinks (have sugar level) and food (note only)
-const CATEGORIES = ['coffee', 'tea', 'drink', 'bakery', 'meal', 'snack'];
-const KIND_OF = { coffee: 'drink', tea: 'drink', drink: 'drink', bakery: 'food', meal: 'food', snack: 'food' };
-const ORDER_STATUSES = ['pending', 'preparing', 'completed', 'cancelled'];
+const CATEGORIES = ['coffee', 'tea', 'drink', 'bakery', 'food'];
+const FOOD_CATS = ['bakery', 'food']; // food items have no sugar level, only a note
+const ORDER_STATUSES = ['awaiting', 'pending', 'preparing', 'completed', 'cancelled']; // 'awaiting' = online order waiting for a verified KHQR payment
 
 // ---------------------------------------------------------------
 // Database
@@ -146,6 +124,13 @@ if (!db.prepare('PRAGMA table_info(products)').all().some((c) => c.name === 'dis
 // Migrations: roles, payments, order tracking, settings
 const hasCol = (t, c) => db.prepare(`PRAGMA table_info(${t})`).all().some((x) => x.name === c);
 if (!hasCol('admins', 'role')) db.exec("ALTER TABLE admins ADD COLUMN role TEXT NOT NULL DEFAULT 'owner'");
+if (!hasCol('admins', 'must_change')) {
+  db.exec('ALTER TABLE admins ADD COLUMN must_change INTEGER NOT NULL DEFAULT 0');
+  // Existing accounts still using the well-known default password must change it at next login
+  for (const a of db.prepare('SELECT id, password_hash FROM admins').all()) {
+    if (bcrypt.compareSync('123456', a.password_hash)) db.prepare('UPDATE admins SET must_change = 1 WHERE id = ?').run(a.id);
+  }
+}
 for (const [col, ddl] of [
   ['pay_status', "TEXT NOT NULL DEFAULT 'unpaid'"],   // unpaid | paid | refunded
   ['pay_method', "TEXT NOT NULL DEFAULT ''"],         // cash | khqr | other
@@ -155,46 +140,140 @@ for (const [col, ddl] of [
   ['rate', 'REAL NOT NULL DEFAULT 0'],
   ['paid_at', 'TEXT'],
   ['track_code', 'TEXT'],
+  ['ip', "TEXT NOT NULL DEFAULT ''"],
+  ['channel', "TEXT NOT NULL DEFAULT 'counter'"],     // counter | online (KHQR checkout)
+  ['order_type', "TEXT NOT NULL DEFAULT 'dine_in'"],  // dine_in | delivery
+  ['delivery_fee', 'REAL NOT NULL DEFAULT 0'],
+  ['phone', "TEXT NOT NULL DEFAULT ''"],
+  ['address', "TEXT NOT NULL DEFAULT ''"],
 ]) {
   if (!hasCol('orders', col)) db.exec(`ALTER TABLE orders ADD COLUMN ${col} ${ddl}`);
 }
 db.exec('CREATE INDEX IF NOT EXISTS idx_orders_track ON orders(track_code)');
-db.exec('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
-
-// Every KHQR payment attempt. An order can have several attempts (expired/failed QR -> new QR).
-db.exec(`
-CREATE TABLE IF NOT EXISTS payments (
+if (!hasCol('products', 'options')) db.exec("ALTER TABLE products ADD COLUMN options TEXT NOT NULL DEFAULT '[]'");
+if (!hasCol('order_items', 'options')) db.exec("ALTER TABLE order_items ADD COLUMN options TEXT NOT NULL DEFAULT ''");
+if (!hasCol('orders', 'status_at')) db.exec('ALTER TABLE orders ADD COLUMN status_at TEXT'); // when the status last changed (queue board)
+if (!hasCol('order_items', 'kind')) { // 'drink' | 'food' snapshot, so old orders keep their meaning if a product changes category
+  db.exec("ALTER TABLE order_items ADD COLUMN kind TEXT NOT NULL DEFAULT 'drink'");
+  db.exec("UPDATE order_items SET kind = 'food' WHERE product_id IN (SELECT id FROM products WHERE category IN ('bakery','food'))");
+}
+db.exec(`CREATE TABLE IF NOT EXISTS shifts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  order_seq INTEGER NOT NULL REFERENCES orders(seq) ON DELETE CASCADE,
-  reference TEXT NOT NULL UNIQUE,            -- bill number embedded in the QR
-  currency TEXT NOT NULL,                    -- USD | KHR
-  amount_minor INTEGER NOT NULL,             -- expected amount: cents (USD) or riel (KHR)
-  rate REAL NOT NULL,                        -- USD->KHR rate used when the QR was made
-  khqr TEXT NOT NULL,
+  opened_at TEXT NOT NULL DEFAULT (datetime('now')), opened_by TEXT NOT NULL,
+  open_usd REAL NOT NULL DEFAULT 0, open_khr REAL NOT NULL DEFAULT 0,
+  closed_at TEXT, closed_by TEXT, count_usd REAL, count_khr REAL, exp_usd REAL, exp_khr REAL,
+  note TEXT NOT NULL DEFAULT ''
+)`);
+db.exec(`CREATE TABLE IF NOT EXISTS payments (
+  id TEXT PRIMARY KEY,                                   -- payment reference; also the KHQR bill number
+  order_seq INTEGER REFERENCES orders(seq),              -- NULL for admin test payments
+  is_test INTEGER NOT NULL DEFAULT 0,
+  provider TEXT NOT NULL DEFAULT 'bakong',
+  currency TEXT NOT NULL CHECK (currency IN ('USD','KHR')),
+  amount REAL NOT NULL,                                  -- exact amount that was requested
+  amount_verified REAL,
+  rate REAL NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','paid','failed','expired','review')),
+  qr TEXT NOT NULL,
   md5 TEXT NOT NULL UNIQUE,
-  status TEXT NOT NULL DEFAULT 'pending',    -- pending | paid | failed | expired | review
-  env TEXT NOT NULL,                         -- sandbox | production
-  account_id TEXT NOT NULL,
+  tx_hash TEXT UNIQUE,                                   -- one bank transaction can settle at most one payment
+  tx_time TEXT, tx_payload TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   expires_at TEXT NOT NULL,
-  attempts INTEGER NOT NULL DEFAULT 0,
-  next_check_at INTEGER NOT NULL DEFAULT 0,  -- epoch ms
-  last_checked_at TEXT,
-  last_error TEXT,
   verified_at TEXT,
-  verified_amount_minor INTEGER,
-  verified_currency TEXT,
-  tx_hash TEXT,
-  from_account TEXT,
-  to_account TEXT,
-  raw_response TEXT,
-  note TEXT
+  last_check_ms INTEGER, attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT NOT NULL DEFAULT '',
+  idem_key TEXT UNIQUE
 );
-CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status, next_check_at);
+CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status);
 CREATE INDEX IF NOT EXISTS idx_payments_order ON payments(order_seq);
--- A real bank transaction can settle at most ONE payment (blocks replays / double use).
-CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_tx_hash ON payments(tx_hash) WHERE tx_hash IS NOT NULL;
-`);
+CREATE TABLE IF NOT EXISTS payment_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, payment_id TEXT NOT NULL, at TEXT NOT NULL DEFAULT (datetime('now')),
+  event TEXT NOT NULL, detail TEXT NOT NULL DEFAULT ''
+)`);
+db.exec('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+db.exec(`CREATE TABLE IF NOT EXISTS audit_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at TEXT NOT NULL DEFAULT (datetime('now')),
+  admin_id INTEGER, username TEXT NOT NULL DEFAULT '',
+  action TEXT NOT NULL, target TEXT NOT NULL DEFAULT '', detail TEXT NOT NULL DEFAULT ''
+)`);
+// Who did what. `req` may be null (system actions) or any object with .admin
+const audit = (req, action, target = '', detail = '') => {
+  try {
+    db.prepare('INSERT INTO audit_log (admin_id, username, action, target, detail) VALUES (?, ?, ?, ?, ?)')
+      .run(req && req.admin ? req.admin.id : null, req && req.admin ? req.admin.username : 'system', action, String(target).slice(0, 80), String(detail).slice(0, 300));
+  } catch (e) { console.error('audit failed:', e.message); }
+};
+
+// ---- Telegram (optional: set TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID) ----
+const TG_API = process.env.TELEGRAM_API || 'https://api.telegram.org';
+const tgOn = () => !!(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID);
+async function tgSend(text) {
+  if (!tgOn()) return false;
+  try {
+    const r = await fetch(`${TG_API}/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: process.env.TELEGRAM_CHAT_ID, text: String(text).slice(0, 3900) }), signal: AbortSignal.timeout(10000),
+    });
+    return r.ok;
+  } catch (e) { console.error('Telegram:', e.message); return false; }
+}
+async function tgSendFile(file, caption) {
+  if (!tgOn()) return false;
+  try {
+    const fd = new FormData();
+    fd.append('chat_id', process.env.TELEGRAM_CHAT_ID);
+    fd.append('caption', caption);
+    fd.append('document', new Blob([fs.readFileSync(file)]), path.basename(file));
+    const r = await fetch(`${TG_API}/bot${process.env.TELEGRAM_BOT_TOKEN}/sendDocument`, { method: 'POST', body: fd, signal: AbortSignal.timeout(60000) });
+    return r.ok;
+  } catch (e) { console.error('Telegram file:', e.message); return false; }
+}
+function tgAfterOrder(order, items) {
+  if (!tgOn()) return;
+  const lines = order.items.map((i) => `• ${i.name} ×${i.quantity}${i.options && i.options.length ? ' [' + i.options.map((o) => o.label).join('/') + ']' : ''}${i.sugar ? ' (ស្ករ ' + i.sugar + ')' : ''}${i.note ? ' 📝 ' + i.note : ''}`).join('\n');
+  tgSend(`🔔 ការកម្ម៉ង់ថ្មី ${order.id}\n👤 ${order.customerName} · ${order.tableNo}\n${lines}\n💰 $${order.total.toFixed(2)}`);
+  const low = Number(process.env.LOW_STOCK ?? 5), qty = {};
+  for (const it of items) qty[it.id] = (qty[it.id] || 0) + Number(it.quantity);
+  for (const [pid, q] of Object.entries(qty)) {
+    const p = db.prepare('SELECT name, stock FROM products WHERE id = ?').get(pid);
+    if (p && p.stock <= low && p.stock + q > low) tgSend(`⚠️ ស្តុកជិតអស់: ${p.name} នៅសល់ ${p.stock}`);
+  }
+}
+
+// ---- Housekeeping: auto-cancel stale unaccepted orders + daily Telegram summary ----
+function expireStale() {
+  const ttl = Number(process.env.PENDING_TTL_MIN ?? 20); // 0 disables
+  if (!(ttl > 0)) return;
+  const rows = db.prepare("SELECT seq FROM orders WHERE status = 'pending' AND pay_status = 'unpaid' AND created_at < datetime('now', ?)").all(`-${ttl} minutes`);
+  for (const r of rows) {
+    tx(() => {
+      const o = db.prepare('SELECT status FROM orders WHERE seq = ?').get(r.seq);
+      if (!o || o.status !== 'pending') return;
+      for (const it of db.prepare('SELECT product_id, quantity FROM order_items WHERE order_seq = ?').all(r.seq)) {
+        db.prepare('UPDATE products SET stock = stock + ? WHERE id = ?').run(it.quantity, it.product_id);
+      }
+      db.prepare("UPDATE orders SET status = 'cancelled' WHERE seq = ?").run(r.seq);
+      audit(null, 'order_auto_cancel', 'ORD-' + (1000 + r.seq), `មិនទាន់ទទួលយកក្នុង ${ttl} នាទី`);
+    })();
+  }
+}
+function dailySummaryIfDue() {
+  const hour = Number(process.env.SUMMARY_HOUR ?? 21);
+  if (!tgOn() || !(hour >= 0 && hour <= 23)) return;
+  const local = new Date(Date.now() + TZ_HOURS * 3600e3), today = local.toISOString().slice(0, 10);
+  if (local.getUTCHours() < hour || getSetting('last_summary', '') === today) return;
+  setSetting('last_summary', today);
+  const p = [TZ_MOD, today, today];
+  const s = db.prepare("SELECT COUNT(*) AS n, COALESCE(SUM(total),0) AS rev, COALESCE(SUM(CASE WHEN pay_status='paid' THEN total END),0) AS paid FROM orders WHERE status != 'cancelled' AND date(created_at, ?) BETWEEN ? AND ?").get(...p);
+  const c = db.prepare("SELECT COUNT(*) AS n FROM orders WHERE status = 'cancelled' AND date(created_at, ?) BETWEEN ? AND ?").get(...p).n;
+  const top = db.prepare("SELECT oi.name AS name, SUM(oi.quantity) AS q FROM order_items oi JOIN orders o ON o.seq = oi.order_seq WHERE o.status != 'cancelled' AND date(o.created_at, ?) BETWEEN ? AND ? GROUP BY oi.name ORDER BY q DESC LIMIT 3").all(...p);
+  tgSend(`📊 សរុបលក់ថ្ងៃនេះ (${today})\nការកម្ម៉ង់: ${s.n} (លុប ${c})\nចំណូល: $${s.rev.toFixed(2)}\nបានទទួលប្រាក់: $${s.paid.toFixed(2)}\nមិនទាន់បង់: $${(s.rev - s.paid).toFixed(2)}` +
+    (top.length ? '\n🏆 ' + top.map((t) => `${t.name} ×${t.q}`).join(', ') : ''));
+}
+function maintenance() {
+  try { expireStale(); dailySummaryIfDue(); } catch (e) { console.error('maintenance:', e.message); }
+}
 
 const getSetting = (k, d = '') => { const r = db.prepare('SELECT value FROM settings WHERE key = ?').get(k); return r ? r.value : d; };
 const setSetting = (k, v) => db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(k, String(v));
@@ -228,7 +307,7 @@ if (db.prepare('SELECT COUNT(*) AS n FROM banners').get().n === 0) {
 if (db.prepare('SELECT COUNT(*) AS n FROM admins').get().n === 0) {
   const u = process.env.ADMIN_USERNAME || 'admin';
   const p = process.env.ADMIN_PASSWORD || '123456';
-  db.prepare("INSERT INTO admins (username, password_hash, role) VALUES (?, ?, 'owner')").run(u, bcrypt.hashSync(p, 10));
+  db.prepare("INSERT INTO admins (username, password_hash, role, must_change) VALUES (?, ?, 'owner', ?)").run(u, bcrypt.hashSync(p, 10), process.env.ADMIN_PASSWORD ? 0 : 1);
   if (!process.env.ADMIN_PASSWORD) {
     console.warn('\n⚠️  Default admin created: admin / 123456 — please change the password right after first login!\n');
   }
@@ -261,25 +340,27 @@ class HttpError extends Error {
 
 // Price after discount, rounded to cents
 const finalPrice = (price, discount) => Math.round(price * (100 - (discount || 0))) / 100;
+const safeParse = (t) => { try { const v = JSON.parse(t || '[]'); return Array.isArray(v) ? v : []; } catch { return []; } };
 
 const productOut = (r) => ({
   id: r.id, name: r.name, category: r.category, price: r.price, stock: r.stock,
-  discount: r.discount || 0, finalPrice: finalPrice(r.price, r.discount), kind: KIND_OF[r.category] || 'drink',
-  status: r.status, description: r.description, image: r.image, created_at: r.created_at,
+  discount: r.discount || 0, finalPrice: finalPrice(r.price, r.discount),
+  status: r.status, description: r.description, image: r.image, options: safeParse(r.options), created_at: r.created_at,
 });
 
 function loadOrders(whereSql = '', params = []) {
   const rows = db.prepare(`SELECT * FROM orders ${whereSql} ORDER BY seq DESC`).all(...params);
   if (!rows.length) return [];
-  const itemsStmt = db.prepare('SELECT name, price, quantity, sugar, note FROM order_items WHERE order_seq = ? ORDER BY id');
+  const itemsStmt = db.prepare('SELECT name, price, quantity, sugar, note, options, kind FROM order_items WHERE order_seq = ? ORDER BY id');
   return rows.map((o) => ({
     id: 'ORD-' + (1000 + o.seq),
     customerName: o.customer_name,
     tableNo: o.table_no,
-    items: itemsStmt.all(o.seq),
+    items: itemsStmt.all(o.seq).map((i) => ({ ...i, options: safeParse(i.options) })),
     total: o.total,
     status: o.status,
     payStatus: o.pay_status,
+    channel: o.channel, orderType: o.order_type, deliveryFee: o.delivery_fee, phone: o.phone, address: o.address,
     payMethod: o.pay_method,
     received: o.received,
     receivedCur: o.received_cur,
@@ -320,6 +401,23 @@ function removeUploadIfUnused(img) {
   if (!still) fs.unlink(path.join(UPLOAD_DIR, path.basename(img)), () => {});
 }
 
+// Option groups (size, ice, toppings...): [{ name, choices: [{ label, price }] }], one choice per group, first is the default
+function parseOptions(v) {
+  if (v === undefined || v === null || v === '') return [];
+  const arr = typeof v === 'string' ? safeParse(v) : v;
+  if (!Array.isArray(arr) || arr.length > 5) throw new HttpError(400, 'ជម្រើសបន្ថែមមិនត្រឹមត្រូវ (អតិបរមា ៥ ក្រុម)');
+  return arr.map((g) => {
+    const name = String((g && g.name) ?? '').trim().slice(0, 30);
+    const ch = g && Array.isArray(g.choices) ? g.choices : [];
+    if (!name || ch.length < 1 || ch.length > 8) throw new HttpError(400, `ក្រុមជម្រើស "${name}" ត្រូវមាន 1-8 ជម្រើស`);
+    return { name, multi: !!(g && g.multi), choices: ch.map((c) => {
+      const label = String((c && c.label) ?? '').trim().slice(0, 30), price = Math.round(Number((c && c.price) ?? 0) * 100) / 100;
+      if (!label || !Number.isFinite(price) || price < 0 || price > 50) throw new HttpError(400, `ជម្រើស "${label}" មិនត្រឹមត្រូវ`);
+      return { label, price };
+    }) };
+  });
+}
+
 // Validation for product payloads
 function parseProduct(body, { partial = false } = {}) {
   const out = {};
@@ -358,6 +456,7 @@ function parseProduct(body, { partial = false } = {}) {
     if (d.length > 500) throw new HttpError(400, 'ការពិពណ៌នាវែងពេក');
     out.description = d;
   }
+  if (!partial || has('options')) out.options = JSON.stringify(parseOptions(body.options));
   if (!partial || has('image')) {
     const img = String(body.image ?? '').trim();
     // Only allow our own uploads or http(s) URLs (blocks javascript:/data: payloads)
@@ -373,24 +472,28 @@ function parseProduct(body, { partial = false } = {}) {
 const app = express();
 app.set('trust proxy', 1);
 app.use(helmet({ contentSecurityPolicy: false, crossOriginResourcePolicy: { policy: 'cross-origin' } }));
-app.use(cors({ origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : true }));
-app.use(express.json({ limit: '100kb' }));
+// Same-origin only by default. Set CORS_ORIGIN=https://your-front-end (comma separated) to allow another site.
+if (process.env.CORS_ORIGIN) app.use(cors({ origin: process.env.CORS_ORIGIN.split(',') }));
+app.use(express.json({ limit: '100kb', verify: (req, res, buf) => { req.rawBody = buf; } })); // raw body is needed to check webhook signatures
 
 // Auth middleware
 function requireAdmin(req, res, next) {
   const h = req.headers.authorization || '';
   const token = h.startsWith('Bearer ') ? h.slice(7) : null;
   if (!token) return next(new HttpError(401, 'តម្រូវឱ្យចូលប្រើជា Admin'));
+  let a;
   try {
     const payload = jwt.verify(token, JWT_SECRET);
     // Always read role from DB so a removed user / changed role takes effect immediately
-    const a = db.prepare('SELECT id, username, role FROM admins WHERE id = ?').get(payload.sub);
+    a = db.prepare('SELECT id, username, role, must_change FROM admins WHERE id = ?').get(payload.sub);
     if (!a) throw new Error('admin removed');
-    req.admin = a;
-    next();
   } catch {
-    next(new HttpError(401, 'Session ផុតកំណត់ សូមចូលប្រើម្តងទៀត'));
+    return next(new HttpError(401, 'Session ផុតកំណត់ សូមចូលប្រើម្តងទៀត'));
   }
+  req.admin = { id: a.id, username: a.username, role: a.role, mustChange: !!a.must_change };
+  // Default password in use: nothing works except changing it
+  if (req.admin.mustChange && !req.originalUrl.startsWith('/api/auth/')) return next(new HttpError(403, 'សូមប្តូរពាក្យសម្ងាត់លំនាំដើមជាមុនសិន'));
+  next();
 }
 
 // Image upload
@@ -424,9 +527,10 @@ app.post('/api/auth/login', loginLimiter, (req, res) => {
   // Always run a compare to keep timing similar whether or not the user exists
   const hash = admin ? admin.password_hash : '$2a$10$invalidinvalidinvalidinvalidinvalidinvalidinvalidinvali';
   const ok = bcrypt.compareSync(password, hash);
-  if (!admin || !ok) return res.status(401).json({ error: 'ឈ្មោះអ្នកប្រើ ឬពាក្យសម្ងាត់មិនត្រឹមត្រូវ!' });
+  if (!admin || !ok) { audit(null, 'login_failed', username.slice(0, 40), 'IP ' + req.ip); return res.status(401).json({ error: 'ឈ្មោះអ្នកប្រើ ឬពាក្យសម្ងាត់មិនត្រឹមត្រូវ!' }); }
   const token = jwt.sign({ sub: admin.id, username: admin.username }, JWT_SECRET, { expiresIn: TOKEN_TTL });
-  res.json({ token, admin: { id: admin.id, username: admin.username, role: admin.role } });
+  audit({ admin }, 'login', '', 'IP ' + req.ip);
+  res.json({ token, admin: { id: admin.id, username: admin.username, role: admin.role, mustChange: !!admin.must_change } });
 });
 
 app.get('/api/auth/me', requireAdmin, (req, res) => res.json({ admin: req.admin }));
@@ -435,204 +539,13 @@ app.post('/api/auth/change-password', requireAdmin, (req, res) => {
   const current = String(req.body.currentPassword ?? '');
   const next = String(req.body.newPassword ?? '');
   if (next.length < 6) throw new HttpError(400, 'ពាក្យសម្ងាត់ថ្មីត្រូវមានយ៉ាងតិច ៦ តួអក្សរ');
+  if (next === '123456' || next === current) throw new HttpError(400, 'សូមជ្រើសពាក្យសម្ងាត់ថ្មីដែលខុសពីមុន និងមិនងាយទាយ');
   const admin = db.prepare('SELECT * FROM admins WHERE id = ?').get(req.admin.id);
   if (!bcrypt.compareSync(current, admin.password_hash)) throw new HttpError(400, 'ពាក្យសម្ងាត់បច្ចុប្បន្នមិនត្រឹមត្រូវ');
-  db.prepare('UPDATE admins SET password_hash = ? WHERE id = ?').run(bcrypt.hashSync(next, 10), admin.id);
+  db.prepare('UPDATE admins SET password_hash = ?, must_change = 0 WHERE id = ?').run(bcrypt.hashSync(next, 10), admin.id);
+  audit(req, 'password_change');
   res.json({ ok: true });
 });
-
-// ---------------------------------------------------------------
-// KHQR checkout: dynamic KHQR + SERVER-SIDE verification through the Bakong Open API.
-// Nothing here trusts the browser. An order becomes "paid" ONLY inside settlePayment(),
-// which runs only after Bakong confirmed a transaction whose amount/currency match.
-// ---------------------------------------------------------------
-const BAKONG_READY = Boolean(BAKONG.token && BAKONG.accountId && BAKONG.merchantName &&
-  (BAKONG.accountType !== 'merchant' || (BAKONG.merchantId && BAKONG.acquiringBank)));
-const GRACE_MS = BAKONG.graceMinutes * 60000;
-const workerState = { lastRunAt: null, lastSuccessAt: null, lastError: '', lastErrorState: '', consecutiveErrors: 0, backoffUntil: 0 };
-let workerBusy = false;
-
-const sqlTime = (ms) => new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
-const parseSqlTime = (t) => Date.parse(String(t).replace(' ', 'T') + 'Z');
-const isoOf = (t) => (t ? new Date(parseSqlTime(t)).toISOString() : null);
-const toMinor = (cur, amount) => {
-  const n = Number(amount);
-  if (!Number.isFinite(n) || n < 0) return null;
-  return cur === 'USD' ? Math.round(n * 100) : cur === 'KHR' ? Math.round(n) : null;
-};
-const fromMinor = (cur, minor) => (cur === 'USD' ? minor / 100 : minor);
-const nextDelayMs = (attempts) => (attempts < 15 ? 4000 : attempts < 45 ? 8000 : 15000);
-
-function publicPayment(p) {
-  return {
-    reference: p.reference, status: p.status, currency: p.currency,
-    amount: fromMinor(p.currency, p.amount_minor), amountMinor: p.amount_minor,
-    khqr: p.status === 'pending' ? p.khqr : null,           // only a live QR is ever handed out
-    createdAt: isoOf(p.created_at), expiresAt: isoOf(p.expires_at), verifiedAt: isoOf(p.verified_at),
-    delayed: p.status === 'pending' && Boolean(p.last_error), // verification temporarily unavailable
-    env: p.env,
-  };
-}
-
-/** Creates the dynamic KHQR for an order (call inside the order transaction). The amount ALWAYS comes from the DB total. */
-function createPayment(seq, totalUsd, currency) {
-  if (!BAKONG_READY) throw new HttpError(503, 'ការបង់ប្រាក់តាម KHQR មិនទាន់បើកទេ');
-  const rate = getRate();
-  const amountMinor = currency === 'KHR' ? khrOf(totalUsd, rate) : Math.round(totalUsd * 100);
-  if (!Number.isInteger(amountMinor) || amountMinor <= 0) throw new HttpError(400, 'ចំនួនទឹកប្រាក់មិនត្រឹមត្រូវ');
-  const createdMs = Date.now();
-  const expiresMs = createdMs + BAKONG.expireMinutes * 60000;
-  const reference = `ORD${1000 + seq}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
-  let khqr;
-  try {
-    khqr = buildDynamicKhqr({
-      accountType: BAKONG.accountType, accountId: BAKONG.accountId, accountInfo: BAKONG.accountInfo[currency],
-      acquiringBank: BAKONG.acquiringBank, merchantId: BAKONG.merchantId, merchantName: BAKONG.merchantName,
-      merchantCity: BAKONG.merchantCity, mcc: BAKONG.mcc, currency, amountMinor, billNumber: reference,
-      storeLabel: BAKONG.storeLabel, createdMs, expiresMs,
-    });
-  } catch (e) {
-    console.error('KHQR build failed:', e.message);
-    throw new HttpError(500, 'មិនអាចបង្កើត KHQR បានទេ');
-  }
-  db.prepare(`INSERT INTO payments (order_seq, reference, currency, amount_minor, rate, khqr, md5, env, account_id, expires_at, next_check_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .run(seq, reference, currency, amountMinor, rate, khqr, md5Of(khqr), BAKONG.env, BAKONG.accountId, sqlTime(expiresMs), Date.now() + 3000);
-}
-
-/** '' when the Bakong transaction matches what we expect, otherwise a human readable reason. */
-function validateTransaction(p, data) {
-  if (!data || typeof data.hash !== 'string' || data.hash.length < 8) return 'transaction has no hash';
-  const cur = String(data.currency || '').toUpperCase();
-  if (cur !== p.currency) return `currency mismatch (paid ${cur || '?'}, expected ${p.currency})`;
-  const minor = toMinor(cur, data.amount);
-  if (minor === null || minor !== p.amount_minor) return `amount mismatch (paid ${data.amount}, expected ${fromMinor(p.currency, p.amount_minor)} ${p.currency})`;
-  if (BAKONG.expectToAccount && data.toAccountId !== BAKONG.expectToAccount) return 'receiver account mismatch';
-  const t = Number(data.createdDateMs);
-  if (Number.isFinite(t) && t > 1e12) {
-    if (t < parseSqlTime(p.created_at) - 120000 || t > parseSqlTime(p.expires_at) + GRACE_MS + 120000) return 'transaction time is outside the payment window';
-  }
-  return '';
-}
-
-function markReview(p, note, data) {
-  const args = [note, data ? toMinor(String(data.currency || '').toUpperCase(), data.amount) : null, data ? String(data.currency || '') : null,
-    data ? data.fromAccountId || null : null, data ? data.toAccountId || null : null, data ? JSON.stringify(data).slice(0, 2000) : null];
-  try {
-    db.prepare("UPDATE payments SET status='review', note=?, verified_amount_minor=?, verified_currency=?, from_account=?, to_account=?, raw_response=?, tx_hash=COALESCE(tx_hash, ?) WHERE id=? AND status IN ('pending','expired','failed')")
-      .run(...args, data && typeof data.hash === 'string' ? data.hash : null, p.id);
-  } catch (e) { // tx hash already used by another payment -> keep it out of the unique column
-    db.prepare("UPDATE payments SET status='review', note=?, verified_amount_minor=?, verified_currency=?, from_account=?, to_account=?, raw_response=? WHERE id=? AND status IN ('pending','expired','failed')")
-      .run(...args, p.id);
-  }
-}
-
-/** Atomically marks payment + order as paid. Idempotent: a payment can be settled exactly once. */
-function settlePayment(p, data) {
-  const minor = toMinor(data.currency.toUpperCase(), data.amount);
-  return tx(() => {
-    const cur = db.prepare('SELECT * FROM payments WHERE id = ?').get(p.id);
-    if (!cur || cur.status !== 'pending') return cur ? cur.status : 'missing';
-    const dup = db.prepare('SELECT id FROM payments WHERE tx_hash = ? AND id != ?').get(data.hash, p.id);
-    const o = db.prepare('SELECT * FROM orders WHERE seq = ?').get(cur.order_seq);
-    let note = '';
-    if (dup) note = `transaction hash already used by payment #${dup.id}`;
-    else if (!o || o.status === 'cancelled' || o.pay_status !== 'awaiting') note = 'verified, but the order is no longer awaiting payment (cancelled/expired). Refund or handle manually';
-    if (note) {
-      db.prepare("UPDATE payments SET status='review', note=?, verified_amount_minor=?, verified_currency=?, from_account=?, to_account=?, raw_response=? WHERE id=? AND status='pending'")
-        .run(note, minor, data.currency, data.fromAccountId || null, data.toAccountId || null, JSON.stringify(data).slice(0, 2000), p.id);
-      return 'review';
-    }
-    const r1 = db.prepare("UPDATE payments SET status='paid', verified_at=datetime('now'), verified_amount_minor=?, verified_currency=?, tx_hash=?, from_account=?, to_account=?, raw_response=?, last_error=NULL, note=NULL WHERE id=? AND status='pending'")
-      .run(minor, data.currency.toUpperCase(), data.hash, data.fromAccountId || null, data.toAccountId || null, JSON.stringify(data).slice(0, 2000), p.id);
-    if (r1.changes !== 1) return 'noop';
-    const r2 = db.prepare("UPDATE orders SET pay_status='paid', pay_method='khqr', received=?, received_cur=?, change_usd=0, rate=?, paid_at=datetime('now') WHERE seq=? AND pay_status='awaiting'")
-      .run(fromMinor(cur.currency, minor), cur.currency, cur.rate, cur.order_seq);
-    if (r2.changes !== 1) throw new Error('order update failed'); // rolls the payment update back too
-    return 'paid';
-  })();
-}
-
-const touchPayment = (p, err) =>
-  db.prepare("UPDATE payments SET attempts = attempts + 1, last_checked_at = datetime('now'), next_check_at = ?, last_error = ? WHERE id = ?")
-    .run(Date.now() + nextDelayMs(p.attempts + 1), err || null, p.id);
-const workerOk = () => { workerState.lastSuccessAt = new Date().toISOString(); workerState.consecutiveErrors = 0; workerState.lastError = ''; workerState.lastErrorState = ''; };
-const workerFail = (r) => { workerState.consecutiveErrors += 1; workerState.lastError = r.message || r.state; workerState.lastErrorState = r.state; };
-
-/** Asks Bakong about one payment and updates the DB. Any doubt keeps the payment pending (never "paid"). */
-async function verifyPayment(id, { manual = false } = {}) {
-  const p = db.prepare('SELECT * FROM payments WHERE id = ?').get(id);
-  if (!p || p.status === 'paid') return p;
-  const recheckable = manual && (p.status === 'expired' || p.status === 'failed');
-  if (p.status !== 'pending' && !recheckable) return p;
-  if (md5Of(p.khqr) !== p.md5) {
-    db.prepare("UPDATE payments SET status='review', note='stored QR does not match its hash (possible tampering)' WHERE id=? AND status IN ('pending','expired','failed')").run(id);
-    return db.prepare('SELECT * FROM payments WHERE id = ?').get(id);
-  }
-  workerState.lastRunAt = new Date().toISOString();
-  const r = await checkTransactionByMd5({ baseUrl: BAKONG.baseUrl, token: BAKONG.token, md5: p.md5 });
-  const expiresMs = parseSqlTime(p.expires_at);
-
-  if (r.state === 'found') {
-    workerOk(); touchPayment(p, null);
-    const reason = validateTransaction(p, r.data);
-    if (reason) markReview(p, reason, r.data);
-    else if (p.status !== 'pending') markReview(p, 'verified transaction found after the payment window closed. Refund or handle manually', r.data);
-    else {
-      try { settlePayment(p, r.data); }
-      catch (e) { console.error('settle failed:', e.message); markReview(p, 'settlement error: ' + e.message, r.data); }
-    }
-  } else if (r.state === 'not_found') {
-    workerOk(); touchPayment(p, null);
-    if (p.status === 'pending' && Date.now() > expiresMs + GRACE_MS) db.prepare("UPDATE payments SET status='expired' WHERE id=? AND status='pending'").run(id);
-  } else if (r.state === 'failed') {
-    workerOk(); touchPayment(p, null);
-    db.prepare("UPDATE payments SET status='failed', note=? WHERE id=? AND status='pending'").run(r.message || 'transaction failed', id);
-  } else { // unauthorized | forbidden | ratelimited | error -> unknown, stay pending and retry later
-    workerFail(r);
-    touchPayment(p, `${r.state}: ${r.message || ''}`.slice(0, 200));
-    if (r.state === 'ratelimited') workerState.backoffUntil = Date.now() + 30000;
-    if (r.state === 'unauthorized' || r.state === 'forbidden') workerState.backoffUntil = Date.now() + 20000;
-    if (p.status === 'pending' && Date.now() > expiresMs + 24 * 3600e3) {
-      db.prepare("UPDATE payments SET status='review', note='verification was unavailable for 24h after expiry. Check the bank app manually' WHERE id=? AND status='pending'").run(id);
-    }
-  }
-  return db.prepare('SELECT * FROM payments WHERE id = ?').get(id);
-}
-
-/** Cancels orders whose KHQR window is over without any payment, and gives the stock back. */
-function cancelAwaitingOrders() {
-  const rows = db.prepare(`SELECT seq FROM orders WHERE pay_status = 'awaiting' AND status != 'cancelled'
-      AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.order_seq = orders.seq AND p.status IN ('pending','review','paid'))
-      AND datetime(COALESCE((SELECT MAX(expires_at) FROM payments WHERE order_seq = orders.seq), created_at), ?) < datetime('now')`)
-    .all(`+${BAKONG.holdMinutes} minutes`);
-  for (const { seq } of rows) {
-    tx(() => {
-      const o = db.prepare('SELECT status, pay_status FROM orders WHERE seq = ?').get(seq);
-      if (!o || o.status === 'cancelled' || o.pay_status !== 'awaiting') return;
-      for (const it of db.prepare('SELECT product_id, quantity FROM order_items WHERE order_seq = ?').all(seq)) {
-        db.prepare('UPDATE products SET stock = stock + ? WHERE id = ?').run(it.quantity, it.product_id);
-      }
-      db.prepare("UPDATE orders SET status = 'cancelled', pay_status = 'expired' WHERE seq = ?").run(seq);
-    })();
-  }
-}
-
-async function paymentWorkerTick() {
-  if (workerBusy) return;
-  workerBusy = true;
-  try {
-    if (BAKONG_READY && Date.now() >= workerState.backoffUntil) {
-      const due = db.prepare("SELECT id FROM payments WHERE status = 'pending' AND next_check_at <= ? ORDER BY next_check_at LIMIT 10").all(Date.now());
-      for (const d of due) {
-        await verifyPayment(d.id);
-        if (Date.now() < workerState.backoffUntil) break;
-      }
-    }
-    cancelAwaitingOrders();
-  } catch (e) { console.error('payment worker:', e.message); }
-  finally { workerBusy = false; }
-}
 
 // ---------------- Public POS API ----------------
 // Menu for the POS screen (active products only)
@@ -643,7 +556,8 @@ app.get('/api/products', (req, res) => {
 
 // Public settings (exchange rate + KHQR image for paying)
 app.get('/api/settings', (req, res) => {
-  res.json({ exchangeRate: getRate(), khqrImage: getSetting('khqr_image', ''), khqrCheckout: BAKONG_READY, khqrEnv: BAKONG.env });
+  res.json({ exchangeRate: getRate(), khqrImage: getSetting('khqr_image', ''), orderingPaused: getSetting('ordering_paused', '0') === '1',
+    khqrOnline: payEnabled(), payMode: payMode(), deliveryEnabled: getSetting('delivery_enabled', '0') === '1', deliveryFee: Number(getSetting('delivery_fee', '0')) || 0 });
 });
 
 // Customer order tracking: only reachable with the unguessable code returned when ordering
@@ -654,7 +568,7 @@ app.get('/api/orders/track/:code', trackLimiter, (req, res) => {
   if (!/^[\w-]{8,40}$/.test(code)) throw new HttpError(404, 'រកមិនឃើញការកម្ម៉ង់');
   const o = loadOrders('WHERE track_code = ?', [code])[0];
   if (!o) throw new HttpError(404, 'រកមិនឃើញការកម្ម៉ង់');
-  const ahead = db.prepare("SELECT COUNT(*) AS n FROM orders WHERE status IN ('pending','preparing') AND pay_status != 'awaiting' AND seq < ?").get(seqFromOrderId(o.id)).n;
+  const ahead = db.prepare("SELECT COUNT(*) AS n FROM orders WHERE status IN ('pending','preparing') AND seq < ?").get(seqFromOrderId(o.id)).n;
   res.json({
     id: o.id, status: o.status, payStatus: o.payStatus, total: o.total, createdAt: o.createdAt,
     queueAhead: (o.status === 'pending' || o.status === 'preparing') ? ahead : 0,
@@ -662,36 +576,46 @@ app.get('/api/orders/track/:code', trackLimiter, (req, res) => {
   });
 });
 
-// Payment page data (by the unguessable order code). Read-only: nothing here can mark anything as paid.
-const payLimiter = rateLimit({ windowMs: 60 * 1000, max: 240, standardHeaders: true, legacyHeaders: false, message: { error: 'សូមរង់ចាំបន្តិច' } });
-function payContext(code) {
-  const c = String(code);
-  if (!/^[\w-]{8,40}$/.test(c)) throw new HttpError(404, 'រកមិនឃើញការកម្ម៉ង់');
-  const o = db.prepare('SELECT * FROM orders WHERE track_code = ?').get(c);
-  if (!o) throw new HttpError(404, 'រកមិនឃើញការកម្ម៉ង់');
-  const p = db.prepare('SELECT * FROM payments WHERE order_seq = ? ORDER BY id DESC LIMIT 1').get(o.seq);
-  if (!p) throw new HttpError(404, 'ការកម្ម៉ង់នេះមិនមានការបង់ប្រាក់ KHQR ទេ');
-  return { o, p };
-}
-app.get('/api/pay/:code', payLimiter, (req, res) => {
-  const { o, p } = payContext(req.params.code);
+// ---- Queue board (TV in the shop): order NUMBERS only, never names ----
+const boardLimiter = rateLimit({ windowMs: 60 * 1000, max: 60, standardHeaders: true, legacyHeaders: false, message: { error: 'សូមរង់ចាំបន្តិច' } });
+app.get('/api/board', boardLimiter, (req, res) => {
+  const rows = db.prepare(`SELECT seq, status FROM orders
+    WHERE (status IN ('pending','preparing') AND created_at >= datetime('now','-6 hours'))
+       OR (status = 'completed' AND COALESCE(status_at, created_at) >= datetime('now','-15 minutes')) ORDER BY seq`).all();
   res.json({
-    orderId: 'ORD-' + (1000 + o.seq), orderStatus: o.status, payStatus: o.pay_status, total: o.total,
-    items: db.prepare('SELECT name, quantity FROM order_items WHERE order_seq = ? ORDER BY id').all(o.seq),
-    payment: publicPayment(p),
-    canRetry: BAKONG_READY && o.pay_status === 'awaiting' && o.status !== 'cancelled' && (p.status === 'failed' || p.status === 'expired'),
-    exchangeRate: getRate(), serverNow: new Date().toISOString(),
+    preparing: rows.filter((r) => r.status !== 'completed').map((r) => 1000 + r.seq),
+    ready: rows.filter((r) => r.status === 'completed').map((r) => 1000 + r.seq),
   });
 });
-const retryLimiter = rateLimit({ windowMs: 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false, message: { error: 'សូមរង់ចាំបន្តិច' } });
-app.post('/api/pay/:code/retry', retryLimiter, (req, res) => {
-  const { o, p } = payContext(req.params.code);
-  if (!BAKONG_READY) throw new HttpError(503, 'ការបង់ប្រាក់តាម KHQR មិនទាន់បើកទេ');
-  if (o.pay_status !== 'awaiting' || o.status === 'cancelled') throw new HttpError(409, 'ការកម្ម៉ង់នេះមិនអាចបង់ប្រាក់ទៀតបានទេ');
-  if (p.status !== 'failed' && p.status !== 'expired') throw new HttpError(409, 'មាន QR កំពុងដំណើរការរួចហើយ');
-  const currency = req.body.currency === 'KHR' ? 'KHR' : 'USD';
-  tx(() => createPayment(o.seq, o.total, currency))();
-  res.status(201).json({ ok: true });
+
+// ---- Smart upsell: what customers actually bought together (no personal data used) ----
+app.get('/api/upsell', boardLimiter, (req, res) => {
+  const ids = String(req.query.ids || '').split(',').filter((x) => /^[\w-]{1,60}$/.test(x)).slice(0, 10);
+  if (!ids.length) return res.json([]);
+  const ph = ids.map(() => '?').join(',');
+  const seedTotal = db.prepare(`SELECT COUNT(DISTINCT oi.order_seq) AS n FROM order_items oi JOIN orders o ON o.seq = oi.order_seq
+    WHERE oi.product_id IN (${ph}) AND o.status != 'cancelled' AND o.created_at >= datetime('now','-90 days')`).get(...ids).n;
+  let rows, mode;
+  if (seedTotal >= 5) { // enough history: "bought together"
+    mode = 'together';
+    rows = db.prepare(`SELECT oi.product_id AS id, COUNT(DISTINCT oi.order_seq) AS n FROM order_items oi
+      WHERE oi.order_seq IN (SELECT oi2.order_seq FROM order_items oi2 JOIN orders o ON o.seq = oi2.order_seq
+        WHERE oi2.product_id IN (${ph}) AND o.status != 'cancelled' AND o.created_at >= datetime('now','-90 days'))
+      AND oi.product_id NOT IN (${ph}) GROUP BY oi.product_id HAVING n >= 2 ORDER BY n DESC LIMIT 8`).all(...ids, ...ids);
+  } else { // little history: honest fallback to best sellers, no percentages
+    mode = 'popular';
+    rows = db.prepare(`SELECT oi.product_id AS id, SUM(oi.quantity) AS n FROM order_items oi JOIN orders o ON o.seq = oi.order_seq
+      WHERE o.status != 'cancelled' AND o.created_at >= datetime('now','-30 days') AND oi.product_id NOT IN (${ph})
+      GROUP BY oi.product_id HAVING n >= 3 ORDER BY n DESC LIMIT 8`).all(...ids);
+  }
+  const get = db.prepare("SELECT * FROM products WHERE id = ? AND status = 'active' AND stock > 0");
+  const out = [];
+  for (const r of rows) {
+    const p = get.get(r.id);
+    if (p) out.push({ id: p.id, name: p.name, price: finalPrice(p.price, p.discount), image: p.image, mode, pct: mode === 'together' ? Math.round((r.n / seedTotal) * 100) : null });
+    if (out.length === 3) break;
+  }
+  res.json(out);
 });
 
 // Active promo banners for the POS home screen
@@ -701,30 +625,50 @@ app.get('/api/banners', (req, res) => {
 });
 
 // Limit order spam from the public customer screen
-const orderLimiter = rateLimit({ windowMs: 60 * 1000, max: 15, standardHeaders: true, legacyHeaders: false,
+const orderLimiter = rateLimit({ windowMs: 60 * 1000, max: Number(process.env.ORDER_RATE_PER_MIN) || 15, // raise on a busy shop: customers on the shop Wi-Fi share one IP
+   standardHeaders: true, legacyHeaders: false,
   message: { error: 'កម្ម៉ង់ញឹកពេក សូមរង់ចាំបន្តិច' } });
 
 // Create an order from the cart. Prices/totals are computed on the server,
 // stock is checked and deducted atomically.
 // NOTE: this is the ONLY public order endpoint. Listing / updating orders is admin-only.
-app.post('/api/orders', orderLimiter, (req, res) => {
-  const customerName = String(req.body.customerName ?? '').trim().slice(0, 80) || 'អតិថិជនទូទៅ';
-  const tableNo = String(req.body.tableNo ?? '').trim().slice(0, 40) || 'តុទូទៅ';
-  const items = Array.isArray(req.body.items) ? req.body.items : [];
+// =====================================================================
+// Order builder (shared by counter orders and online KHQR checkout).
+// Every price comes from the database; nothing monetary is read from the client.
+// =====================================================================
+const r2 = (x) => Math.round(x * 100) / 100;
+function adminSettings() {
+  return { exchangeRate: getRate(), khqrImage: getSetting('khqr_image', ''), deliveryEnabled: getSetting('delivery_enabled', '0') === '1', deliveryFee: Number(getSetting('delivery_fee', '0')) || 0 };
+}
+function placeOrder(body, ip, { online = false, makePayment = null } = {}) {
+  if (getSetting('ordering_paused', '0') === '1') throw new HttpError(409, 'ហាងកំពុងផ្អាកទទួលការកម្ម៉ង់ជាបណ្តោះអាសន្ន សូមព្យាយាមម្តងទៀតបន្តិចក្រោយ');
+  const customerName = String(body.customerName ?? '').trim().slice(0, 80) || 'អតិថិជនទូទៅ';
+  let tableNo = String(body.tableNo ?? '').trim().slice(0, 40) || 'តុទូទៅ';
+  const items = Array.isArray(body.items) ? body.items : [];
   if (!items.length || items.length > 50) throw new HttpError(400, 'កន្ត្រកទទេ ឬធំពេក');
-  const payWith = req.body.payWith === 'khqr' ? 'khqr' : 'counter';
-  const payCurrency = req.body.currency === 'KHR' ? 'KHR' : 'USD';
-  if (payWith === 'khqr' && !BAKONG_READY) throw new HttpError(503, 'ការបង់ប្រាក់តាម KHQR មិនទាន់បើកទេ');
+  const perIp = Number(process.env.PENDING_PER_IP ?? 10);
+  if (perIp > 0 && db.prepare("SELECT COUNT(*) AS n FROM orders WHERE ip = ? AND status IN ('pending','awaiting') AND pay_status = 'unpaid'").get(ip || '').n >= perIp)
+    throw new HttpError(429, 'មានការកម្ម៉ង់កំពុងរង់ចាំច្រើនពេក សូមរង់ចាំបន្តិច');
+
+  let deliveryFee = 0, orderType = 'dine_in', phone = '', address = '';
+  if (body.delivery === true) {
+    if (getSetting('delivery_enabled', '0') !== '1') throw new HttpError(400, 'ហាងមិនទាន់បើកសេវាដឹកជញ្ជូនទេ');
+    phone = String(body.phone ?? '').trim(); address = String(body.address ?? '').trim();
+    if (!/^[+\d][\d\s-]{5,19}$/.test(phone)) throw new HttpError(400, 'លេខទូរស័ព្ទមិនត្រឹមត្រូវ');
+    if (address.length < 5 || address.length > 200) throw new HttpError(400, 'អាសយដ្ឋានមិនត្រឹមត្រូវ (៥-២០០ តួអក្សរ)');
+    deliveryFee = r2(Math.max(0, Number(getSetting('delivery_fee', '0')) || 0));
+    orderType = 'delivery'; tableNo = 'ដឹកជញ្ជូន';
+  }
 
   const getProduct = db.prepare('SELECT * FROM products WHERE id = ?');
   const decStock = db.prepare('UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?');
   const trackCode = crypto.randomBytes(9).toString('base64url');
-  const insOrder = db.prepare('INSERT INTO orders (customer_name, table_no, total, track_code, pay_status) VALUES (?, ?, 0, ?, ?)');
-  const insItem = db.prepare('INSERT INTO order_items (order_seq, product_id, name, price, quantity, sugar, note) VALUES (?, ?, ?, ?, ?, ?, ?)');
+  const insOrder = db.prepare('INSERT INTO orders (customer_name, table_no, total, track_code, ip, status, channel, order_type, delivery_fee, phone, address) VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)');
+  const insItem = db.prepare('INSERT INTO order_items (order_seq, product_id, name, price, quantity, sugar, note, options, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
   const setTotal = db.prepare('UPDATE orders SET total = ? WHERE seq = ?');
 
   const create = tx(() => {
-    const { lastInsertRowid: seq } = insOrder.run(customerName, tableNo, trackCode, payWith === 'khqr' ? 'awaiting' : 'unpaid');
+    const { lastInsertRowid: seq } = insOrder.run(customerName, tableNo, trackCode, ip || '', online ? 'awaiting' : 'pending', online ? 'online' : 'counter', orderType, deliveryFee, phone, address);
     let total = 0;
     for (const it of items) {
       const qty = Number(it.quantity);
@@ -732,21 +676,281 @@ app.post('/api/orders', orderLimiter, (req, res) => {
       const p = getProduct.get(String(it.id));
       if (!p || p.status !== 'active') throw new HttpError(409, `ទំនិញ "${it.name ?? it.id}" មិនមានលក់ទៀតទេ`);
       if (decStock.run(qty, p.id, qty).changes === 0) throw new HttpError(409, `ទំនិញ "${p.name}" អស់ស្តុក ឬមិនគ្រប់ចំនួន (នៅសល់ ${p.stock})`);
-      const sugar = KIND_OF[p.category] === 'food' ? '' : String(it.sugar ?? '').slice(0, 20); // food has no sugar level
+      const food = FOOD_CATS.includes(p.category);
+      const sugar = food ? '' : String(it.sugar ?? '').slice(0, 20); // food never carries a sugar level
       const note = String(it.note ?? '').replace(/\s+/g, ' ').trim().slice(0, 100);
-      const unit = finalPrice(p.price, p.discount); // discounted unit price, computed on the server
-      insItem.run(seq, p.id, p.name, unit, qty, sugar, note);
+      // chosen options are re-validated against the product's own option groups; price delta comes from the server
+      const picked = Array.isArray(it.options) ? it.options : [], chosen = [];
+      for (const g of safeParse(p.options)) {
+        if (g.multi) { // add-ons: zero or more, each validated against the product's own list, no duplicates
+          const seen = new Set();
+          for (const w of picked.filter((x) => x && x.group === g.name)) {
+            const c = g.choices.find((x) => x.label === w.label);
+            if (!c) throw new HttpError(400, `ជម្រើស "${g.name}" មិនត្រឹមត្រូវ`);
+            if (seen.has(c.label)) continue;
+            seen.add(c.label);
+            chosen.push({ group: g.name, label: c.label, price: c.price });
+          }
+          continue;
+        }
+        const want = picked.find((x) => x && x.group === g.name);
+        const c = want ? g.choices.find((x) => x.label === want.label) : g.choices[0];
+        if (!c) throw new HttpError(400, `ជម្រើស "${g.name}" មិនត្រឹមត្រូវ`);
+        chosen.push({ group: g.name, label: c.label, price: c.price });
+      }
+      const unit = r2(finalPrice(p.price, p.discount) + chosen.reduce((n, c) => n + c.price, 0));
+      insItem.run(seq, p.id, p.name, unit, qty, sugar, note, JSON.stringify(chosen), food ? 'food' : 'drink');
       total += unit * qty;
     }
-    total = Math.round(total * 100) / 100;
+    total = r2(total + deliveryFee);
     setTotal.run(total, seq);
-    if (payWith === 'khqr') createPayment(seq, total, payCurrency); // price comes from the DB, never from the browser
-    return seq;
+    const extra = makePayment ? makePayment(seq, total) : null; // inside the same transaction: if KHQR creation fails, the order and its stock reservation roll back
+    return { seq, total, extra };
   });
+  return { ...create(), trackCode, items };
+}
 
-  const seq = create();
-  const pay = payWith === 'khqr' ? db.prepare('SELECT * FROM payments WHERE order_seq = ? ORDER BY id DESC LIMIT 1').get(seq) : null;
-  res.status(201).json({ ...loadOrders('WHERE seq = ?', [seq])[0], trackCode, payment: pay ? publicPayment(pay) : null });
+app.post('/api/orders', orderLimiter, (req, res) => {
+  const { seq, trackCode, items } = placeOrder(req.body, req.ip);
+  const created = loadOrders('WHERE seq = ?', [seq])[0];
+  tgAfterOrder(created, items);
+  res.status(201).json({ ...created, trackCode });
+});
+
+// =====================================================================
+// Online KHQR checkout + payment verification (Bakong)
+// An order becomes PAID only when the server itself has verified a matching
+// transaction with the Bakong API. No client request, callback or admin
+// action can mark an online payment as paid.
+// =====================================================================
+const PAY_GRACE_MS = 3 * 60e3;
+const payEnabled = () => process.env.KHQR_ENABLED === 'true' && !!process.env.BAKONG_TOKEN && !!process.env.BAKONG_ACCOUNT;
+const payMode = () => (process.env.BAKONG_MODE === 'production' ? 'production' : 'sandbox');
+const payTtlMs = () => (Number(process.env.PAYMENT_TTL_MIN) || 10) * 60e3;
+const bakongBase = () => (process.env.BAKONG_API_BASE || 'https://api-bakong.nbc.gov.kh').replace(/\/+$/, '');
+const sqlTime = (ms) => new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
+const parseSql = (t) => Date.parse(String(t).replace(' ', 'T') + 'Z');
+const payLog = (id, event, detail = '') => { try { db.prepare('INSERT INTO payment_log (payment_id, event, detail) VALUES (?, ?, ?)').run(id, event, String(detail).slice(0, 300)); } catch (_) { /* never break payment flow on logging */ } };
+const amountFor = (total, currency, rate) => (currency === 'KHR' ? khrOf(total, rate) : r2(total));
+
+function buildKhqr({ ref, currency, amount, expiresMs }) {
+  const account = (currency === 'KHR' && process.env.BAKONG_ACCOUNT_KHR) || process.env.BAKONG_ACCOUNT;
+  const opt = { currency: currency === 'KHR' ? khqrData.currency.khr : khqrData.currency.usd, amount, billNumber: ref, expirationTimestamp: expiresMs };
+  const accNo = process.env['BAKONG_ACCOUNT_INFO_' + currency]; // e.g. the bank account number for that currency (ABA puts it in the QR)
+  if (accNo) opt.accountInformation = accNo;
+  if (process.env.BAKONG_ACQUIRING_BANK) opt.acquiringBank = process.env.BAKONG_ACQUIRING_BANK;
+  const name = (process.env.BAKONG_MERCHANT_NAME || 'MLOB DOUNG COFFEE').slice(0, 25), city = (process.env.BAKONG_MERCHANT_CITY || 'PHNOM PENH').slice(0, 15);
+  const k = new BakongKHQR();
+  const r = process.env.BAKONG_MERCHANT_ID
+    ? k.generateMerchant(new MerchantInfo(account, name, city, process.env.BAKONG_MERCHANT_ID, process.env.BAKONG_ACQUIRING_BANK || '', opt))
+    : k.generateIndividual(new IndividualInfo(account, name, city, opt));
+  if (!r || !r.data || !r.data.qr || !r.data.md5) throw new HttpError(502, 'មិនអាចបង្កើត KHQR បានទេ');
+  return r.data;
+}
+
+function newPayment({ orderSeq = null, isTest = 0, currency, amount, rate, idemKey = null }) {
+  const id = 'MD' + crypto.randomBytes(7).toString('hex').toUpperCase(); // unique reference, 16 chars (KHQR bill number limit is 25)
+  const expMs = Date.now() + payTtlMs();
+  const k = buildKhqr({ ref: id, currency, amount, expiresMs: expMs });
+  db.prepare('INSERT INTO payments (id, order_seq, is_test, currency, amount, rate, qr, md5, expires_at, idem_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(id, orderSeq, isTest, currency, amount, rate, k.qr, k.md5, sqlTime(expMs), idemKey);
+  payLog(id, 'created', `${amount} ${currency}`);
+  return id;
+}
+
+// ---- talk to Bakong. Anything that is not a clear answer is an ERROR, which keeps the payment pending.
+async function bakongLookup(md5) {
+  let r;
+  try {
+    r = await fetch(bakongBase() + '/v1/check_transaction_by_md5', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + process.env.BAKONG_TOKEN },
+      body: JSON.stringify({ md5 }), signal: AbortSignal.timeout(8000),
+    });
+  } catch (e) { return { state: 'error', detail: 'network: ' + e.message }; }
+  if (r.status === 401 || r.status === 403) return { state: 'error', detail: 'HTTP ' + r.status + ' (token/IP not authorised)' };
+  if (!r.ok) return { state: 'error', detail: 'HTTP ' + r.status };
+  let j;
+  try { j = await r.json(); } catch { return { state: 'error', detail: 'invalid JSON from API' }; }
+  if (j && j.responseCode === 0 && j.data && typeof j.data === 'object') return { state: 'found', data: j.data };
+  if (j && j.responseCode === 1 && (j.errorCode === 3 || /could not be found|not found/i.test(String(j.responseMessage || '')))) return { state: 'not_found' };
+  return { state: 'error', detail: `API ${j && j.responseCode}/${j && j.errorCode}: ${String((j && j.responseMessage) || '').slice(0, 100)}` };
+}
+
+function validateTx(p, d) {
+  const cur = String(d.currency || '').toUpperCase(), amt = Number(d.amount);
+  const hash = String(d.hash || '');
+  if (!/^[A-Za-z0-9]{6,128}$/.test(hash)) return { ok: false, reason: 'transaction has no valid hash' };
+  if (cur !== p.currency) return { ok: false, reason: `currency mismatch: paid ${cur || '?'}, expected ${p.currency}` };
+  if (!Number.isFinite(amt)) return { ok: false, reason: 'amount missing' };
+  const same = p.currency === 'KHR' ? Math.round(amt) === Math.round(p.amount) : Math.abs(amt - p.amount) < 0.005;
+  if (!same) return { ok: false, reason: `amount mismatch: paid ${amt} ${cur}, expected ${p.amount} ${p.currency}` };
+  const to = String(d.toAccountId || '');
+  // accepted destination identifiers: the Bakong account ID plus anything listed in BAKONG_ACCEPT_TO (e.g. the account number your bank reports)
+  const want = [process.env.BAKONG_ACCOUNT, process.env.BAKONG_ACCOUNT_KHR, ...String(process.env.BAKONG_ACCEPT_TO || '').split(',')].map((x) => String(x || '').trim().toLowerCase()).filter(Boolean);
+  if (to && want.length && !want.includes(to.toLowerCase())) return { ok: false, reason: 'destination account mismatch' };
+  const t = Number(d.createdDateMs);
+  if (Number.isFinite(t) && t > 0 && (t < parseSql(p.created_at) - 5 * 60e3 || t > parseSql(p.expires_at) + PAY_GRACE_MS)) return { ok: false, reason: 'transaction time outside the payment window' };
+  return { ok: true, amount: p.currency === 'KHR' ? Math.round(amt) : r2(amt), hash, time: Number.isFinite(t) && t > 0 ? sqlTime(t) : null };
+}
+
+function markReview(pid, reason, data) {
+  const r = db.prepare("UPDATE payments SET status = 'review', last_error = ?, tx_payload = ? WHERE id = ? AND status IN ('pending','expired','failed')").run(String(reason).slice(0, 200), JSON.stringify(data || {}).slice(0, 2000), pid);
+  if (r.changes) { payLog(pid, 'review', reason); audit(null, 'payment_review', pid, reason); tgSend(`⚠️ ការទូទាត់ត្រូវការត្រួតពិនិត្យ ${pid}\n${reason}`); }
+}
+
+// Atomic + idempotent: only the first successful call can move a payment to PAID.
+const settleTx = tx((pid, data, v) => {
+  const p = db.prepare('SELECT * FROM payments WHERE id = ?').get(pid);
+  if (!p || p.status === 'paid') return { result: 'noop' };
+  if (db.prepare('SELECT 1 FROM payments WHERE tx_hash = ? AND id != ?').get(v.hash, pid)) return { result: 'review', reason: 'this bank transaction was already used for another payment' };
+  const o = p.order_seq ? db.prepare('SELECT * FROM orders WHERE seq = ?').get(p.order_seq) : null;
+  if (p.status === 'expired' || p.status === 'failed') return { result: 'review', reason: 'paid after the payment expired or was cancelled (order already released): refund or recreate manually' };
+  if (p.order_seq && (!o || o.status !== 'awaiting')) return { result: 'review', reason: 'order is no longer awaiting payment' };
+  db.prepare("UPDATE payments SET status = 'paid', amount_verified = ?, tx_hash = ?, tx_time = ?, tx_payload = ?, verified_at = datetime('now'), last_error = '' WHERE id = ? AND status = 'pending'")
+    .run(v.amount, v.hash, v.time, JSON.stringify(data).slice(0, 2000), pid);
+  if (db.prepare('SELECT status FROM payments WHERE id = ?').get(pid).status !== 'paid') return { result: 'noop' };
+  if (o) db.prepare("UPDATE orders SET status = 'pending', pay_status = 'paid', pay_method = 'khqr', received = ?, received_cur = ?, change_usd = 0, rate = ?, paid_at = datetime('now'), status_at = datetime('now') WHERE seq = ? AND status = 'awaiting'")
+    .run(v.amount, p.currency, p.rate, p.order_seq);
+  return { result: 'paid', seq: p.order_seq };
+});
+
+function afterPaid(pid, seq) {
+  payLog(pid, 'verified', 'paid');
+  audit(null, 'payment_verified', pid, seq ? 'ORD-' + (1000 + seq) : 'test payment');
+  const p = db.prepare('SELECT currency, amount_verified FROM payments WHERE id = ?').get(pid);
+  tgSend(`💳 បានទទួលប្រាក់ KHQR ${seq ? 'ORD-' + (1000 + seq) : '(តេស្ត)'} ${p.currency === 'KHR' ? '៛' + p.amount_verified : '$' + p.amount_verified}`);
+  if (seq) {
+    const order = loadOrders('WHERE seq = ?', [seq])[0];
+    const its = db.prepare('SELECT product_id AS id, quantity FROM order_items WHERE order_seq = ?').all(seq);
+    tgAfterOrder(order, its); // the kitchen is notified only now, after verified payment
+  }
+}
+
+function finalizeIfExpired(pid) {
+  tx(() => {
+    const p = db.prepare('SELECT * FROM payments WHERE id = ?').get(pid);
+    if (!p || p.status !== 'pending') return;
+    const end = parseSql(p.expires_at) + PAY_GRACE_MS, now = Date.now();
+    if (now <= end) return;
+    const checkedAfter = p.last_check_ms && p.last_check_ms > end && !p.last_error; // a clean "not found" answer after the deadline
+    if (!checkedAfter && now < end + 30 * 60e3) return; // API trouble: keep pending and keep retrying (hard cap: 30 more minutes)
+    db.prepare("UPDATE payments SET status = 'expired' WHERE id = ?").run(pid);
+    if (p.order_seq) {
+      const o = db.prepare('SELECT status FROM orders WHERE seq = ?').get(p.order_seq);
+      if (o && o.status === 'awaiting') {
+        for (const it of db.prepare('SELECT product_id, quantity FROM order_items WHERE order_seq = ?').all(p.order_seq)) db.prepare('UPDATE products SET stock = stock + ? WHERE id = ?').run(it.quantity, it.product_id);
+        db.prepare("UPDATE orders SET status = 'cancelled', status_at = datetime('now') WHERE seq = ?").run(p.order_seq);
+      }
+    }
+    payLog(pid, 'expired', '');
+    audit(null, 'payment_expired', pid, p.order_seq ? 'ORD-' + (1000 + p.order_seq) : 'test payment');
+  })();
+}
+
+const verifying = new Set();
+async function verifyPayment(pid, { force = false } = {}) {
+  let p = db.prepare('SELECT * FROM payments WHERE id = ?').get(pid);
+  if (!p || p.status === 'paid' || !payEnabled()) return p;
+  const now = Date.now();
+  if (p.status === 'review' && !force) return p;
+  const closed = p.status === 'expired' || p.status === 'failed';
+  if (closed && !force && now > parseSql(p.expires_at) + 30 * 60e3) return p; // late-payment watch ends 30 min after expiry
+  const gap = closed ? 60e3 : 2500; // polite to the API: pending every 2.5s at most, expired every 60s
+  if (!force && p.last_check_ms && now - p.last_check_ms < gap) return p;
+  if (verifying.has(pid)) return p; // one lookup at a time per payment
+  verifying.add(pid);
+  try {
+    db.prepare('UPDATE payments SET last_check_ms = ?, attempts = attempts + 1 WHERE id = ?').run(now, pid);
+    const res = await bakongLookup(p.md5);
+    p = db.prepare('SELECT * FROM payments WHERE id = ?').get(pid);
+    if (p.status === 'paid') return p;
+    if (res.state === 'error') {
+      db.prepare('UPDATE payments SET last_error = ? WHERE id = ?').run(res.detail.slice(0, 200), pid);
+      payLog(pid, 'verify_error', res.detail);
+    } else {
+      if (p.last_error && p.status !== 'review') db.prepare("UPDATE payments SET last_error = '' WHERE id = ?").run(pid);
+      if (res.state === 'found') {
+        const v = validateTx(p, res.data);
+        if (!v.ok) markReview(pid, v.reason, res.data);
+        else {
+          const out = settleTx(pid, res.data, v);
+          if (out.result === 'paid') afterPaid(pid, out.seq);
+          else if (out.result === 'review') markReview(pid, out.reason, res.data);
+        }
+      }
+    }
+  } catch (e) {
+    db.prepare('UPDATE payments SET last_error = ? WHERE id = ?').run(('internal: ' + e.message).slice(0, 200), pid);
+  } finally { verifying.delete(pid); }
+  finalizeIfExpired(pid);
+  return db.prepare('SELECT * FROM payments WHERE id = ?').get(pid);
+}
+
+async function paymentTick() {
+  if (!payEnabled()) return;
+  const rows = db.prepare("SELECT id FROM payments WHERE status = 'pending' OR (status IN ('expired','failed') AND expires_at > ?) ORDER BY created_at LIMIT 25").all(sqlTime(Date.now() - 30 * 60e3));
+  for (const r of rows) await verifyPayment(r.id);
+}
+
+const iso = (t) => (t ? String(t).replace(' ', 'T') + 'Z' : null);
+const payOut = (p) => ({
+  id: p.id, orderId: p.order_seq ? 'ORD-' + (1000 + p.order_seq) : null, isTest: !!p.is_test, currency: p.currency, amount: p.amount,
+  amountVerified: p.amount_verified, status: p.status, txHash: p.tx_hash, txTime: iso(p.tx_time), createdAt: iso(p.created_at),
+  expiresAt: iso(p.expires_at), verifiedAt: iso(p.verified_at), attempts: p.attempts, lastError: p.last_error,
+});
+async function customerPayView(p, o) {
+  return {
+    orderId: 'ORD-' + (1000 + o.seq), orderStatus: o.status, ref: p.id, status: p.status, currency: p.currency, amount: p.amount,
+    expiresAt: iso(p.expires_at), serverTime: new Date().toISOString(), mode: payMode(), shop: process.env.BAKONG_MERCHANT_NAME || 'MLOB DOUNG COFFEE',
+    qrImage: p.status === 'pending' ? await QRCode.toDataURL(p.qr, { margin: 1, width: 320 }) : null,
+  };
+}
+
+app.post('/api/checkout', orderLimiter, (req, res) => {
+  if (!payEnabled()) throw new HttpError(409, 'ការទូទាត់តាម KHQR មិនទាន់បើកទេ សូមបង់ប្រាក់នៅបញ្ជរ');
+  const currency = req.body.currency === 'KHR' ? 'KHR' : req.body.currency === 'USD' ? 'USD' : null;
+  if (!currency) throw new HttpError(400, 'រូបិយប័ណ្ណមិនត្រឹមត្រូវ');
+  const idem = req.body.idemKey === undefined ? null : String(req.body.idemKey);
+  if (idem !== null && !/^[\w-]{16,64}$/.test(idem)) throw new HttpError(400, 'idemKey មិនត្រឹមត្រូវ');
+  if (idem) { // double click / page refresh: return the same checkout, never a second order
+    const ex = db.prepare('SELECT p.id, o.seq, o.track_code FROM payments p JOIN orders o ON o.seq = p.order_seq WHERE p.idem_key = ?').get(idem);
+    if (ex) return res.json({ orderId: 'ORD-' + (1000 + ex.seq), trackCode: ex.track_code, paymentRef: ex.id, repeated: true });
+  }
+  const out = placeOrder(req.body, req.ip, {
+    online: true,
+    makePayment: (seq, total) => {
+      const rate = getRate(), amount = amountFor(total, currency, rate);
+      if (!(amount > 0)) throw new HttpError(400, 'ចំនួនទឹកប្រាក់មិនត្រឹមត្រូវ');
+      return newPayment({ orderSeq: seq, currency, amount, rate, idemKey: idem });
+    },
+  });
+  audit(null, 'checkout_created', 'ORD-' + (1000 + out.seq), `${out.extra}`);
+  res.status(201).json({ orderId: 'ORD-' + (1000 + out.seq), trackCode: out.trackCode, paymentRef: out.extra });
+});
+
+// Customer payment page data. Reachable only with the unguessable order code. Polling here also speeds up verification (throttled).
+app.get('/api/pay/:code', trackLimiter, asyncH(async (req, res) => {
+  const code = String(req.params.code);
+  if (!/^[\w-]{8,40}$/.test(code)) throw new HttpError(404, 'រកមិនឃើញ');
+  const o = db.prepare('SELECT seq, status FROM orders WHERE track_code = ?').get(code);
+  let p = o && db.prepare('SELECT * FROM payments WHERE order_seq = ? ORDER BY created_at DESC LIMIT 1').get(o.seq);
+  if (!p) throw new HttpError(404, 'រកមិនឃើញការទូទាត់');
+  if (p.status === 'pending') p = (await verifyPayment(p.id)) || p;
+  const fresh = db.prepare('SELECT seq, status FROM orders WHERE seq = ?').get(o.seq);
+  res.setHeader('Cache-Control', 'no-store');
+  res.json(await customerPayView(p, fresh));
+}));
+
+// Optional provider callback. The body is NEVER trusted: a valid signature only makes the server re-check with the bank.
+app.post('/api/payments/webhook', (req, res) => {
+  const secret = process.env.PAYMENT_WEBHOOK_SECRET;
+  if (!secret) return res.status(404).json({ error: 'Not found' });
+  const got = Buffer.from(String(req.get('x-signature') || ''), 'utf8');
+  const want = Buffer.from(crypto.createHmac('sha256', secret).update(req.rawBody || Buffer.alloc(0)).digest('hex'), 'utf8');
+  if (got.length !== want.length || !crypto.timingSafeEqual(got, want)) { audit(null, 'webhook_rejected', '', 'bad signature from ' + req.ip); return res.status(401).json({ error: 'Unauthorized' }); }
+  const ref = String((req.body && req.body.reference) || '');
+  if (/^MD[0-9A-F]{14}$/.test(ref)) verifyPayment(ref, { force: true }).catch(() => {});
+  res.json({ ok: true });
 });
 
 // ---------------- Admin API (JWT required) ----------------
@@ -754,7 +958,7 @@ const admin = express.Router();
 admin.use(requireAdmin);
 // Roles: 'owner' can do everything; 'cashier' can only work with orders (view, status, payment)
 admin.use((req, res, next) => {
-  if (req.admin.role === 'owner' || req.path.startsWith('/orders')) return next();
+  if (req.admin.role === 'owner' || req.path.startsWith('/orders') || req.path === '/ordering' || req.path.startsWith('/shifts')) return next();
   next(new HttpError(403, 'មុខងារនេះសម្រាប់ម្ចាស់ហាងប៉ុណ្ណោះ'));
 });
 
@@ -766,8 +970,9 @@ admin.get('/products', (req, res) => {
 admin.post('/products', (req, res) => {
   const data = parseProduct(req.body);
   const id = 'prod-' + Date.now() + '-' + crypto.randomBytes(2).toString('hex');
-  db.prepare(`INSERT INTO products (id, name, category, price, discount, stock, status, description, image)
-              VALUES (@id, @name, @category, @price, @discount, @stock, @status, @description, @image)`).run({ id, ...data });
+  db.prepare(`INSERT INTO products (id, name, category, price, discount, stock, status, description, image, options)
+              VALUES (@id, @name, @category, @price, @discount, @stock, @status, @description, @image, @options)`).run({ id, ...data });
+  audit(req, 'product_create', id, `${data.name} $${data.price} stock ${data.stock}`);
   res.status(201).json(productOut(db.prepare('SELECT * FROM products WHERE id = ?').get(id)));
 });
 
@@ -776,7 +981,8 @@ admin.put('/products/:id', (req, res) => {
   if (!existing) throw new HttpError(404, 'រកមិនឃើញទំនិញ');
   const data = parseProduct(req.body);
   db.prepare(`UPDATE products SET name=@name, category=@category, price=@price, discount=@discount, stock=@stock,
-              status=@status, description=@description, image=@image WHERE id=@id`).run({ id: req.params.id, ...data });
+              status=@status, description=@description, image=@image, options=@options WHERE id=@id`).run({ id: req.params.id, ...data });
+  audit(req, 'product_update', req.params.id, `${existing.name}: $${existing.price}→$${data.price}, ស្តុក ${existing.stock}→${data.stock}, បញ្ចុះ ${existing.discount || 0}→${data.discount}%, ${existing.status}→${data.status}`);
   res.json(productOut(db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id)));
 });
 
@@ -788,6 +994,7 @@ admin.patch('/products/:id', (req, res) => {
   const keys = Object.keys(data);
   if (!keys.length) throw new HttpError(400, 'គ្មានទិន្នន័យត្រូវកែ');
   db.prepare(`UPDATE products SET ${keys.map((k) => `${k} = @${k}`).join(', ')} WHERE id = @id`).run({ id: req.params.id, ...data });
+  audit(req, 'product_update', req.params.id, `${existing.name}: ${keys.map((k) => `${k} ${existing[k]}→${data[k]}`).join(', ')}`);
   res.json(productOut(db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id)));
 });
 
@@ -797,6 +1004,7 @@ admin.post('/products/:id/stock', (req, res) => {
   if (!Number.isInteger(delta) || Math.abs(delta) > 100000) throw new HttpError(400, 'delta មិនត្រឹមត្រូវ');
   const r = db.prepare('UPDATE products SET stock = MAX(0, stock + ?) WHERE id = ?').run(delta, req.params.id);
   if (!r.changes) throw new HttpError(404, 'រកមិនឃើញទំនិញ');
+  audit(req, 'stock_adjust', req.params.id, `${delta > 0 ? '+' : ''}${delta}`);
   res.json(productOut(db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id)));
 });
 
@@ -804,6 +1012,7 @@ admin.delete('/products/:id', (req, res) => {
   const p = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
   if (!p) throw new HttpError(404, 'រកមិនឃើញទំនិញ');
   db.prepare('DELETE FROM products WHERE id = ?').run(req.params.id);
+  audit(req, 'product_delete', req.params.id, p.name);
   // Remove the uploaded file if it was ours and nothing else uses it
   if (p.image.startsWith('/uploads/')) {
     const still = db.prepare('SELECT 1 FROM products WHERE image = ? UNION SELECT 1 FROM banners WHERE image = ? UNION SELECT 1 FROM settings WHERE value = ?').get(p.image, p.image, p.image);
@@ -895,32 +1104,45 @@ admin.get('/orders', (req, res) => {
   const limit = Math.min(Number(req.query.limit) || 200, 1000);
   if (status && status !== 'all') {
     if (!ORDER_STATUSES.includes(status)) throw new HttpError(400, 'status មិនត្រឹមត្រូវ');
-    return res.json(loadOrders("WHERE status = ? AND pay_status != 'awaiting'", [status]).slice(0, limit));
+    return res.json(loadOrders('WHERE status = ?', [status]).slice(0, limit));
   }
-  res.json(loadOrders("WHERE date(created_at) >= date('now', '-7 day') AND pay_status != 'awaiting'").slice(0, limit));
+  res.json(loadOrders("WHERE date(created_at) >= date('now', '-7 day')").slice(0, limit));
 });
 
 admin.patch('/orders/:id/status', (req, res) => {
   const seq = seqFromOrderId(req.params.id);
   const status = req.body.status;
+  const reason = String(req.body.reason ?? '').trim().slice(0, 200);
   if (!ORDER_STATUSES.includes(status)) throw new HttpError(400, 'status មិនត្រឹមត្រូវ');
-  // Cancelling restores stock (once)
-  const updateStatus = tx(() => {
+  const FLOW = { awaiting: ['cancelled'], pending: ['preparing', 'completed', 'cancelled'], preparing: ['completed', 'cancelled'], completed: ['cancelled'], cancelled: [] };
+  let prev = null, moneyCancel = null;
+  tx(() => {
     const o = db.prepare('SELECT * FROM orders WHERE seq = ?').get(seq);
     if (!o) throw new HttpError(404, 'រកមិនឃើញការកម្ម៉ង់');
-    if (o.pay_status === 'awaiting') throw new HttpError(409, 'ការកម្ម៉ង់នេះកំពុងរង់ចាំការបង់ប្រាក់ KHQR');
     if (o.status === status) return;
+    if (!FLOW[o.status].includes(status)) {
+      throw new HttpError(409, o.status === 'cancelled' ? 'ការកម្ម៉ង់ដែលបានបោះបង់ មិនអាចបើកឡើងវិញបានទេ' : 'មិនអាចប្តូរស្ថានភាពថយក្រោយបានទេ');
+    }
     if (status === 'cancelled') {
+      const risky = o.pay_status === 'paid' || o.status === 'completed'; // money taken or drink already served
+      if (risky) {
+        if (req.admin.role !== 'owner') throw new HttpError(403, 'ការលុបការកម្ម៉ង់ដែលបានបង់ប្រាក់ ឬបម្រើរួច ត្រូវការម្ចាស់ហាង');
+        if (reason.length < 3) throw new HttpError(400, 'សូមបញ្ចូលមូលហេតុនៃការលុប/សងប្រាក់');
+        moneyCancel = { total: o.total };
+      }
       for (const it of db.prepare('SELECT product_id, quantity FROM order_items WHERE order_seq = ?').all(seq)) {
         db.prepare('UPDATE products SET stock = stock + ? WHERE id = ?').run(it.quantity, it.product_id);
       }
-    } else if (o.status === 'cancelled') {
-      throw new HttpError(409, 'ការកម្ម៉ង់ដែលបានបោះបង់ មិនអាចបើកឡើងវិញបានទេ');
+      db.prepare("UPDATE orders SET pay_status = 'refunded' WHERE seq = ? AND pay_status = 'paid'").run(seq);
     }
-    db.prepare('UPDATE orders SET status = ? WHERE seq = ?').run(status, seq);
-    if (status === 'cancelled') db.prepare("UPDATE orders SET pay_status = 'refunded' WHERE seq = ? AND pay_status = 'paid'").run(seq);
-  });
-  updateStatus();
+    prev = o.status;
+    db.prepare("UPDATE orders SET status = ?, status_at = datetime('now') WHERE seq = ?").run(status, seq);
+    if (status === 'cancelled') db.prepare("UPDATE payments SET status = 'failed' WHERE order_seq = ? AND status = 'pending'").run(seq);
+  })();
+  if (prev) {
+    audit(req, 'order_status', req.params.id, `${prev} → ${status}${reason ? ': ' + reason : ''}`);
+    if (moneyCancel) tgSend(`↩️ លុប/សងប្រាក់ ${req.params.id} ($${moneyCancel.total.toFixed(2)})\nដោយ ${req.admin.username}\nមូលហេតុ: ${reason}`);
+  }
   res.json(loadOrders('WHERE seq = ?', [seq])[0]);
 });
 
@@ -934,9 +1156,9 @@ admin.post('/orders/:id/pay', (req, res) => {
   tx(() => {
     const o = db.prepare('SELECT * FROM orders WHERE seq = ?').get(seq);
     if (!o) throw new HttpError(404, 'រកមិនឃើញការកម្ម៉ង់');
+    if (o.channel === 'online') throw new HttpError(409, 'ការទូទាត់អនឡាញ (KHQR) ត្រូវផ្ទៀងផ្ទាត់ដោយប្រព័ន្ធតែប៉ុណ្ណោះ មិនអាចកត់ដោយដៃបានទេ');
     if (o.status === 'cancelled') throw new HttpError(409, 'ការកម្ម៉ង់នេះត្រូវបានលុបចោល');
     if (o.pay_status === 'paid') throw new HttpError(409, 'បានបង់ប្រាក់រួចហើយ');
-    if (o.pay_status === 'awaiting') throw new HttpError(409, 'ការកម្ម៉ង់នេះកំពុងរង់ចាំការបង់ប្រាក់ KHQR (ត្រូវផ្ទៀងផ្ទាត់ដោយប្រព័ន្ធ)');
     const rate = getRate();
     let changeUsd = 0;
     if (method === 'cash') {
@@ -953,86 +1175,25 @@ admin.post('/orders/:id/pay', (req, res) => {
     db.prepare("UPDATE orders SET pay_status = 'paid', pay_method = ?, received = ?, received_cur = ?, change_usd = ?, rate = ?, paid_at = datetime('now') WHERE seq = ?")
       .run(method, received, cur, changeUsd, rate, seq);
   })();
+  audit(req, 'order_pay', req.params.id, `${method} ${method === 'cash' ? received + ' ' + cur : ''}`.trim());
   res.json(loadOrders('WHERE seq = ?', [seq])[0]);
-});
-
-// ---------------- Admin: KHQR payments dashboard (owner only) ----------------
-const adminPaymentOut = (p) => ({
-  id: p.id, orderId: 'ORD-' + (1000 + p.order_seq), customer: p.customer_name, table: p.table_no, reference: p.reference,
-  currency: p.currency, expected: fromMinor(p.currency, p.amount_minor),
-  verified: p.verified_amount_minor == null ? null : fromMinor(p.verified_currency || p.currency, p.verified_amount_minor),
-  verifiedCurrency: p.verified_currency, txHash: p.tx_hash, fromAccount: p.from_account, toAccount: p.to_account,
-  status: p.status, env: p.env, createdAt: isoOf(p.created_at), expiresAt: isoOf(p.expires_at), verifiedAt: isoOf(p.verified_at),
-  attempts: p.attempts, lastCheckedAt: isoOf(p.last_checked_at), lastError: p.last_error, note: p.note,
-});
-
-admin.get('/payments/health', (req, res) => {
-  const counts = Object.fromEntries(['pending', 'paid', 'failed', 'expired', 'review'].map((k) => [k, 0]));
-  for (const r of db.prepare('SELECT status, COUNT(*) AS n FROM payments GROUP BY status').all()) counts[r.status] = r.n;
-  const oldest = db.prepare("SELECT MIN(created_at) AS t FROM payments WHERE status = 'pending'").get().t;
-  const tk = BAKONG.token ? tokenInfo(BAKONG.token) : { expMs: null, daysLeft: null };
-  let host = '';
-  try { host = new URL(BAKONG.baseUrl).host; } catch (_) {}
-  const warnings = [];
-  if (!BAKONG_READY) warnings.push('KHQR checkout is OFF. Set BAKONG_TOKEN, BAKONG_ACCOUNT_ID and BAKONG_MERCHANT_NAME (see PAYMENT_SETUP.md).');
-  if (BAKONG.env === 'sandbox') warnings.push('SANDBOX mode: QR codes are for testing only. Set BAKONG_ENV=production when you are ready.');
-  if (BAKONG.env === 'production' && /sit-api/.test(BAKONG.baseUrl)) warnings.push('BAKONG_ENV=production but BAKONG_BASE_URL points to the sandbox.');
-  if (tk.daysLeft !== null && tk.daysLeft <= 14) warnings.push(tk.daysLeft < 0 ? 'The Bakong token has EXPIRED. Renew it, then update BAKONG_TOKEN.' : `The Bakong token expires in ${tk.daysLeft} day(s). Renew it soon.`);
-  if (workerState.consecutiveErrors >= 3) {
-    warnings.push(`Verification is failing (${workerState.lastErrorState}): ${workerState.lastError}.` +
-      (workerState.lastErrorState === 'forbidden' ? ' HTTP 403 often means the API refuses servers outside Cambodia. See PAYMENT_SETUP.md.' : ''));
-  }
-  if (oldest && Date.now() - parseSqlTime(oldest) > 20 * 60000) warnings.push('Some payments have been pending for over 20 minutes. Check the list below.');
-  res.json({
-    enabled: BAKONG_READY, env: BAKONG.env, apiHost: host, accountId: BAKONG.accountId || null, accountType: BAKONG.accountType,
-    tokenDaysLeft: tk.daysLeft, worker: { lastRunAt: workerState.lastRunAt, lastSuccessAt: workerState.lastSuccessAt, lastError: workerState.lastError, consecutiveErrors: workerState.consecutiveErrors },
-    counts, warnings,
-  });
-});
-
-admin.get('/payments', (req, res) => {
-  const where = [];
-  const params = [];
-  if (req.query.status && ['pending', 'paid', 'failed', 'expired', 'review'].includes(req.query.status)) { where.push('p.status = ?'); params.push(req.query.status); }
-  const q = String(req.query.q ?? '').trim().slice(0, 80);
-  if (q) {
-    const m = /^ORD-?(\d+)$/i.exec(q);
-    if (m) { where.push('p.order_seq = ?'); params.push(Number(m[1]) - 1000); }
-    else { where.push('(p.reference LIKE ? OR p.tx_hash LIKE ?)'); params.push(`%${q}%`, `%${q}%`); }
-  }
-  const limit = Math.min(Number(req.query.limit) || 200, 500);
-  const rows = db.prepare(`SELECT p.*, o.customer_name, o.table_no FROM payments p JOIN orders o ON o.seq = p.order_seq
-      ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY p.id DESC LIMIT ?`).all(...params, limit);
-  res.json(rows.map(adminPaymentOut));
-});
-
-// Ask Bakong again right now (for pending / expired / failed payments). Never trusts the browser: it just runs the same verification.
-admin.post('/payments/:id/recheck', async (req, res, next) => {
-  try {
-    const id = Number(req.params.id);
-    const p = db.prepare('SELECT * FROM payments WHERE id = ?').get(id);
-    if (!p) throw new HttpError(404, 'រកមិនឃើញការបង់ប្រាក់');
-    if (!BAKONG_READY) throw new HttpError(503, 'KHQR មិនទាន់បើកទេ');
-    if (p.last_checked_at && Date.now() - parseSqlTime(p.last_checked_at) < 3000) throw new HttpError(429, 'សូមរង់ចាំបន្តិច');
-    await verifyPayment(id, { manual: true });
-    const row = db.prepare('SELECT p.*, o.customer_name, o.table_no FROM payments p JOIN orders o ON o.seq = p.order_seq WHERE p.id = ?').get(id);
-    res.json(adminPaymentOut(row));
-  } catch (e) { next(e); }
 });
 
 // ---------------- Admin: settings ----------------
 admin.get('/settings', (req, res) => {
-  res.json({ exchangeRate: getRate(), khqrImage: getSetting('khqr_image', '') });
+  res.json(adminSettings());
 });
 admin.put('/settings', (req, res) => {
   const rate = Number(req.body.exchangeRate);
   if (!Number.isFinite(rate) || rate < 100 || rate > 100000) throw new HttpError(400, 'អត្រាប្តូរប្រាក់មិនត្រឹមត្រូវ');
   const oldQr = getSetting('khqr_image', '');
   const qr = parseImage(req.body.khqrImage, false);
+  const oldRate = getRate();
   setSetting('exchange_rate', rate);
   setSetting('khqr_image', qr);
+  audit(req, 'settings', '', `អត្រា ${oldRate}→${rate}${oldQr !== qr ? ', ប្តូររូប KHQR' : ''}`);
   if (oldQr && oldQr !== qr) removeUploadIfUnused(oldQr);
-  res.json({ exchangeRate: getRate(), khqrImage: getSetting('khqr_image', '') });
+  res.json(adminSettings());
 });
 
 // ---------------- Admin: reports ----------------
@@ -1048,21 +1209,21 @@ function reportRange(q) {
 
 admin.get('/reports', (req, res) => {
   const { from, to } = reportRange(req.query);
-  const W = "status != 'cancelled' AND pay_status != 'awaiting' AND date(created_at, ?) BETWEEN ? AND ?";
+  const W = "status != 'cancelled' AND date(created_at, ?) BETWEEN ? AND ?";
   const p = [TZ_MOD, from, to];
   const sum = db.prepare(`SELECT COUNT(*) AS orders, COALESCE(SUM(total),0) AS revenue,
       COALESCE(SUM(CASE WHEN pay_status='paid' THEN total END),0) AS paid FROM orders WHERE ${W}`).get(...p);
-  const cancelled = db.prepare("SELECT COUNT(*) AS n FROM orders WHERE status = 'cancelled' AND pay_status != 'expired' AND date(created_at, ?) BETWEEN ? AND ?").get(...p).n;
+  const cancelled = db.prepare("SELECT COUNT(*) AS n FROM orders WHERE status = 'cancelled' AND date(created_at, ?) BETWEEN ? AND ?").get(...p).n;
   const daily = db.prepare(`SELECT date(created_at, ?) AS d, COUNT(*) AS orders, COALESCE(SUM(total),0) AS revenue
-      FROM orders WHERE status != 'cancelled' AND pay_status != 'awaiting' AND date(created_at, ?) BETWEEN ? AND ? GROUP BY d ORDER BY d`).all(TZ_MOD, ...p);
+      FROM orders WHERE status != 'cancelled' AND date(created_at, ?) BETWEEN ? AND ? GROUP BY d ORDER BY d`).all(TZ_MOD, ...p);
   const hourly = db.prepare(`SELECT CAST(strftime('%H', created_at, ?) AS INTEGER) AS h, COUNT(*) AS orders, COALESCE(SUM(total),0) AS revenue
-      FROM orders WHERE status != 'cancelled' AND pay_status != 'awaiting' AND date(created_at, ?) BETWEEN ? AND ? GROUP BY h ORDER BY h`).all(TZ_MOD, ...p);
+      FROM orders WHERE status != 'cancelled' AND date(created_at, ?) BETWEEN ? AND ? GROUP BY h ORDER BY h`).all(TZ_MOD, ...p);
   const top = db.prepare(`SELECT oi.name AS name, SUM(oi.quantity) AS qty, SUM(oi.quantity * oi.price) AS revenue
       FROM order_items oi JOIN orders o ON o.seq = oi.order_seq
-      WHERE o.status != 'cancelled' AND o.pay_status != 'awaiting' AND date(o.created_at, ?) BETWEEN ? AND ?
+      WHERE o.status != 'cancelled' AND date(o.created_at, ?) BETWEEN ? AND ?
       GROUP BY oi.name ORDER BY qty DESC, revenue DESC LIMIT 10`).all(...p);
   const methods = db.prepare(`SELECT pay_method AS method, COUNT(*) AS orders, COALESCE(SUM(total),0) AS total
-      FROM orders WHERE status != 'cancelled' AND pay_status != 'awaiting' AND pay_status = 'paid' AND date(created_at, ?) BETWEEN ? AND ? GROUP BY pay_method`).all(...p);
+      FROM orders WHERE status != 'cancelled' AND pay_status = 'paid' AND date(created_at, ?) BETWEEN ? AND ? GROUP BY pay_method`).all(...p);
   const r2 = (n) => Math.round(n * 100) / 100;
   res.json({
     from, to, rate: getRate(),
@@ -1079,8 +1240,12 @@ admin.get('/reports', (req, res) => {
 
 admin.get('/reports/export', (req, res) => {
   const { from, to } = reportRange(req.query);
-  const rows = loadOrders("WHERE date(created_at, ?) BETWEEN ? AND ? AND pay_status != 'awaiting'", [TZ_MOD, from, to]).reverse();
-  const q = (v) => '"' + String(v ?? '').replace(/"/g, '""') + '"';
+  const rows = loadOrders('WHERE date(created_at, ?) BETWEEN ? AND ?', [TZ_MOD, from, to]).reverse();
+  const q = (v) => { // neutralise spreadsheet formulas (=, +, -, @) in text typed by customers
+    let t = String(v ?? '');
+    if (typeof v === 'string' && /^[=+\-@\t\r]/.test(t)) t = "'" + t;
+    return '"' + t.replace(/"/g, '""') + '"';
+  };
   const local = (iso) => new Date(Date.parse(iso) + TZ_HOURS * 3600e3).toISOString().replace('T', ' ').slice(0, 16);
   const head = ['Order', 'Date', 'Customer', 'Table', 'Items', 'Total USD', 'Status', 'Payment status', 'Method', 'Received', 'Currency', 'Change USD'];
   const lines = [head.map(q).join(',')];
@@ -1114,12 +1279,16 @@ function listBackups() {
 function autoBackup() {
   try {
     const last = listBackups()[0];
-    if (!last || Date.now() - Date.parse(last.createdAt) > 20 * 3600e3) makeBackup('auto');
+    if (!last || Date.now() - Date.parse(last.createdAt) > 20 * 3600e3) {
+      const n = makeBackup('auto');
+      tgSendFile(path.join(BACKUP_DIR, n), '💾 Backup ' + n);
+    }
     for (const b of listBackups().slice(7)) fs.unlink(path.join(BACKUP_DIR, b.name), () => {}); // keep the newest 7
   } catch (e) { console.error('Auto-backup failed:', e.message); }
 }
 
 admin.get('/backup', (req, res, next) => {
+  audit(req, 'backup_download');
   const name = makeBackup('manual');
   const file = path.join(BACKUP_DIR, name);
   res.download(file, name, (err) => { fs.unlink(file, () => {}); if (err && !res.headersSent) next(err); });
@@ -1147,6 +1316,7 @@ admin.post('/users', (req, res) => {
   if (!ROLES.includes(role)) throw new HttpError(400, 'តួនាទីមិនត្រឹមត្រូវ');
   if (db.prepare('SELECT 1 FROM admins WHERE username = ?').get(username)) throw new HttpError(409, 'ឈ្មោះគណនីនេះមានរួចហើយ');
   const { lastInsertRowid: id } = db.prepare('INSERT INTO admins (username, password_hash, role) VALUES (?, ?, ?)').run(username, bcrypt.hashSync(password, 10), role);
+  audit(req, 'user_create', username, role);
   res.status(201).json(db.prepare('SELECT id, username, role, created_at FROM admins WHERE id = ?').get(id));
 });
 admin.patch('/users/:id', (req, res) => {
@@ -1163,6 +1333,7 @@ admin.patch('/users/:id', (req, res) => {
     if (pw.length < 6) throw new HttpError(400, 'ពាក្យសម្ងាត់ត្រូវមានយ៉ាងតិច ៦ តួអក្សរ');
     db.prepare('UPDATE admins SET password_hash = ? WHERE id = ?').run(bcrypt.hashSync(pw, 10), id);
   }
+  audit(req, 'user_update', u.username, `${req.body.role !== undefined ? 'role ' + u.role + '→' + req.body.role : ''}${req.body.password !== undefined ? ' ប្តូរពាក្យសម្ងាត់' : ''}`.trim());
   res.json(db.prepare('SELECT id, username, role, created_at FROM admins WHERE id = ?').get(id));
 });
 admin.delete('/users/:id', (req, res) => {
@@ -1172,13 +1343,151 @@ admin.delete('/users/:id', (req, res) => {
   if (id === req.admin.id) throw new HttpError(400, 'មិនអាចលុបគណនីរបស់ខ្លួនឯងបានទេ');
   if (u.role === 'owner' && ownersCount() <= 1) throw new HttpError(400, 'ត្រូវមានម្ចាស់ហាងយ៉ាងតិចម្នាក់');
   db.prepare('DELETE FROM admins WHERE id = ?').run(id);
+  audit(req, 'user_delete', u.username);
   res.json({ ok: true });
 });
+
+// ---------------- Pause / resume customer ordering ----------------
+admin.put('/ordering', (req, res) => {
+  const paused = !!req.body.paused;
+  setSetting('ordering_paused', paused ? '1' : '0');
+  audit(req, 'ordering', paused ? 'paused' : 'open');
+  tgSend(paused ? '⏸️ ផ្អាកទទួលការកម្ម៉ង់ ដោយ ' + req.admin.username : '▶️ បើកទទួលការកម្ម៉ង់វិញ ដោយ ' + req.admin.username);
+  res.json({ orderingPaused: paused });
+});
+
+// ---------------- Cash drawer shifts (cashier + owner) ----------------
+const isoDt = (d) => d.replace(' ', 'T') + 'Z';
+const cash = (v) => { const n = Number(v ?? 0); if (!Number.isFinite(n) || n < 0 || n > 1e9) throw new HttpError(400, 'ចំនួនលុយមិនត្រឹមត្រូវ'); return n; };
+function shiftExpected(sh) {
+  // Cash sales in the shift. Assumes change is returned in the same currency that was received.
+  let usd = 0, khr = 0, n = 0;
+  for (const o of db.prepare("SELECT total, rate, received_cur FROM orders WHERE pay_method = 'cash' AND pay_status = 'paid' AND paid_at >= ? AND paid_at <= ?").all(sh.opened_at, sh.closed_at || '9999')) {
+    n++;
+    if (o.received_cur === 'KHR') khr += khrOf(o.total, o.rate > 0 ? o.rate : getRate()); else usd += o.total;
+  }
+  const r2 = (x) => Math.round(x * 100) / 100;
+  return { salesUsd: r2(usd), salesKhr: khr, orders: n, expUsd: r2(sh.open_usd + usd), expKhr: sh.open_khr + khr };
+}
+const shiftOut = (sh) => ({
+  id: sh.id, openedAt: isoDt(sh.opened_at), openedBy: sh.opened_by, openUsd: sh.open_usd, openKhr: sh.open_khr,
+  closedAt: sh.closed_at ? isoDt(sh.closed_at) : null, closedBy: sh.closed_by, countUsd: sh.count_usd, countKhr: sh.count_khr, note: sh.note,
+  ...(sh.closed_at ? { expUsd: sh.exp_usd, expKhr: sh.exp_khr } : shiftExpected(sh)),
+});
+const openShift = () => db.prepare('SELECT * FROM shifts WHERE closed_at IS NULL ORDER BY id DESC LIMIT 1').get();
+admin.get('/shifts/current', (req, res) => { const sh = openShift(); res.json(sh ? shiftOut(sh) : null); });
+admin.get('/shifts', (req, res) => res.json(db.prepare('SELECT * FROM shifts WHERE closed_at IS NOT NULL ORDER BY id DESC LIMIT 30').all().map(shiftOut)));
+admin.post('/shifts/open', (req, res) => {
+  if (openShift()) throw new HttpError(409, 'មានវេនកំពុងបើករួចហើយ');
+  const u = cash(req.body.openUsd), k = cash(req.body.openKhr);
+  const { lastInsertRowid: id } = db.prepare('INSERT INTO shifts (opened_by, open_usd, open_khr) VALUES (?, ?, ?)').run(req.admin.username, u, k);
+  audit(req, 'shift_open', '#' + id, `$${u} + ៛${k}`);
+  res.status(201).json(shiftOut(db.prepare('SELECT * FROM shifts WHERE id = ?').get(id)));
+});
+admin.post('/shifts/close', (req, res) => {
+  const sh = openShift();
+  if (!sh) throw new HttpError(409, 'មិនមានវេនកំពុងបើកទេ');
+  const cu = cash(req.body.countUsd), ck = cash(req.body.countKhr), note = String(req.body.note ?? '').trim().slice(0, 200);
+  const e = shiftExpected(sh);
+  db.prepare("UPDATE shifts SET closed_at = datetime('now'), closed_by = ?, count_usd = ?, count_khr = ?, exp_usd = ?, exp_khr = ?, note = ? WHERE id = ?")
+    .run(req.admin.username, cu, ck, e.expUsd, e.expKhr, note, sh.id);
+  const dU = Math.round((cu - e.expUsd) * 100) / 100, dK = ck - e.expKhr;
+  audit(req, 'shift_close', '#' + sh.id, `USD ${dU >= 0 ? '+' : ''}${dU}, KHR ${dK >= 0 ? '+' : ''}${dK}${note ? ' · ' + note : ''}`);
+  tgSend(`💵 បិទវេន #${sh.id} ដោយ ${req.admin.username}\nUSD: រំពឹង $${e.expUsd} រាប់បាន $${cu} (${dU === 0 ? 'ត្រូវ' : dU > 0 ? 'លើស $' + dU : 'ខ្វះ $' + (-dU)})\nKHR: រំពឹង ៛${e.expKhr} រាប់បាន ៛${ck} (${dK === 0 ? 'ត្រូវ' : dK > 0 ? 'លើស ៛' + dK : 'ខ្វះ ៛' + (-dK)})`);
+  res.json(shiftOut(db.prepare('SELECT * FROM shifts WHERE id = ?').get(sh.id)));
+});
+
+// ---------------- Restore from a backup file (owner only) ----------------
+const restoreUpload = multer({ dest: path.join(DATA_DIR, 'tmp'), limits: { fileSize: 200 * 1024 * 1024, files: 1 } });
+admin.post('/restore', restoreUpload.single('file'), (req, res) => {
+  if (!req.file) throw new HttpError(400, 'សូមជ្រើសរើសឯកសារ Backup (.db)');
+  const tmp = req.file.path;
+  try {
+    const head = Buffer.alloc(16), fd = fs.openSync(tmp, 'r');
+    fs.readSync(fd, head, 0, 16, 0); fs.closeSync(fd);
+    if (head.toString('latin1') !== 'SQLite format 3\0') throw new HttpError(400, 'ឯកសារនេះមិនមែនជា Backup ត្រឹមត្រូវទេ');
+    const restored = {};
+    db.exec(`ATTACH DATABASE '${tmp.replace(/'/g, "''")}' AS rs`);
+    try {
+      const have = new Set(db.prepare("SELECT name FROM rs.sqlite_master WHERE type = 'table'").all().map((r) => r.name));
+      for (const t of ['products', 'orders', 'order_items', 'admins']) if (!have.has(t)) throw new HttpError(400, `Backup មិនមានតារាង ${t}`);
+      if (db.prepare('PRAGMA rs.integrity_check').get().integrity_check !== 'ok') throw new HttpError(400, 'ឯកសារ Backup ខូច');
+      if (db.prepare('SELECT COUNT(*) AS n FROM rs.admins').get().n < 1) throw new HttpError(400, 'Backup មិនមានគណនី Admin');
+      makeBackup('prerestore'); // safety copy of what is being replaced
+      const tables = ['order_items', 'orders', 'products', 'banners', 'settings', 'admins'].filter((t) => have.has(t)); // children first
+      tx(() => {
+        for (const t of tables) db.exec(`DELETE FROM main.${t}`);
+        for (const t of [...tables].reverse()) {
+          const mc = db.prepare(`PRAGMA main.table_info(${t})`).all().map((c) => c.name);
+          const rc = new Set(db.prepare(`PRAGMA rs.table_info(${t})`).all().map((c) => c.name));
+          const cols = mc.filter((c) => rc.has(c)).map((c) => `"${c}"`).join(',');
+          db.exec(`INSERT INTO main.${t} (${cols}) SELECT ${cols} FROM rs.${t}`);
+          restored[t] = db.prepare(`SELECT COUNT(*) AS n FROM main.${t}`).get().n;
+        }
+      })();
+    } finally { try { db.exec('DETACH DATABASE rs'); } catch (_) { /* not attached */ } }
+    audit(req, 'restore', String(req.file.originalname).slice(0, 60), JSON.stringify(restored));
+    tgSend('♻️ ស្តារទិន្នន័យពី Backup ដោយ ' + req.admin.username + '\n' + JSON.stringify(restored));
+    res.json({ ok: true, restored });
+  } finally { fs.unlink(tmp, () => {}); }
+});
+
+// ---------------- Payments dashboard (owner only: not on the cashier allow-list) ----------------
+admin.get('/payments/config', (req, res) => res.json({
+  enabled: payEnabled(), mode: payMode(), apiBase: bakongBase(), account: process.env.BAKONG_ACCOUNT || '',
+  tokenConfigured: !!process.env.BAKONG_TOKEN, webhookEnabled: !!process.env.PAYMENT_WEBHOOK_SECRET, ttlMin: payTtlMs() / 60e3,
+}));
+admin.get('/payments', (req, res) => {
+  const w = [], a = [];
+  if (req.query.status && ['pending', 'paid', 'failed', 'expired', 'review'].includes(String(req.query.status))) { w.push('status = ?'); a.push(String(req.query.status)); }
+  res.json(db.prepare(`SELECT * FROM payments ${w.length ? 'WHERE ' + w.join(' AND ') : ''} ORDER BY created_at DESC LIMIT 200`).all(...a).map(payOut));
+});
+admin.post('/payments/test', asyncH(async (req, res) => { // a REAL payment of the smallest amount, for end-to-end verification
+  if (!payEnabled()) throw new HttpError(409, 'KHQR មិនទាន់បើក (ពិនិត្យ KHQR_ENABLED, BAKONG_TOKEN, BAKONG_ACCOUNT)');
+  const currency = req.body.currency === 'KHR' ? 'KHR' : 'USD';
+  const id = db.prepare('SELECT 1').get() && tx(() => newPayment({ isTest: 1, currency, amount: currency === 'KHR' ? 100 : 0.01, rate: getRate() }))();
+  audit(req, 'payment_test_created', id, currency);
+  const p = db.prepare('SELECT * FROM payments WHERE id = ?').get(id);
+  res.status(201).json({ ...payOut(p), qrImage: await QRCode.toDataURL(p.qr, { margin: 1, width: 320 }) });
+}));
+admin.get('/payments/:id', asyncH(async (req, res) => {
+  const p = db.prepare('SELECT * FROM payments WHERE id = ?').get(String(req.params.id));
+  if (!p) throw new HttpError(404, 'រកមិនឃើញ');
+  const log = db.prepare('SELECT at, event, detail FROM payment_log WHERE payment_id = ? ORDER BY id DESC LIMIT 30').all(p.id).map((l) => ({ ...l, at: iso(l.at) }));
+  let txPayload = null; try { txPayload = p.tx_payload ? JSON.parse(p.tx_payload) : null; } catch (_) { /* keep null */ }
+  res.json({ ...payOut(p), log, txPayload, qrImage: p.status === 'pending' ? await QRCode.toDataURL(p.qr, { margin: 1, width: 320 }) : null });
+}));
+admin.post('/payments/:id/verify', asyncH(async (req, res) => { // only asks the bank again; there is deliberately no "mark as paid" action
+  const p = await verifyPayment(String(req.params.id), { force: true });
+  if (!p) throw new HttpError(404, 'រកមិនឃើញ');
+  audit(req, 'payment_recheck', p.id);
+  res.json(payOut(p));
+}));
+admin.put('/delivery', (req, res) => {
+  const fee = Number(req.body.fee ?? 0);
+  if (!Number.isFinite(fee) || fee < 0 || fee > 100) throw new HttpError(400, 'ថ្លៃដឹកជញ្ជូនមិនត្រឹមត្រូវ');
+  setSetting('delivery_enabled', req.body.enabled ? '1' : '0');
+  setSetting('delivery_fee', r2(fee));
+  audit(req, 'settings', '', `ដឹកជញ្ជូន ${req.body.enabled ? 'បើក' : 'បិទ'} $${r2(fee)}`);
+  res.json(adminSettings());
+});
+
+admin.get('/audit', (req, res) => {
+  const limit = Math.min(Number(req.query.limit) || 200, 1000);
+  res.json(db.prepare('SELECT id, at, username, action, target, detail FROM audit_log ORDER BY id DESC LIMIT ?').all(limit)
+    .map((r) => ({ ...r, at: r.at.replace(' ', 'T') + 'Z' })));
+});
+admin.post('/telegram/test', asyncH(async (req, res) => {
+  if (!tgOn()) return res.json({ ok: false, message: 'មិនទាន់កំណត់ TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID ក្នុង .env' });
+  const ok = await tgSend('✅ សារសាកល្បងពី កាហ្វេ ម្លប់ដូង (' + req.admin.username + ')');
+  res.json({ ok, message: ok ? 'បានផ្ញើសារសាកល្បងរួចរាល់ សូមពិនិត្យ Telegram' : 'ផ្ញើមិនបាន សូមពិនិត្យ token និង chat id' });
+}));
 
 app.use('/api/admin', admin);
 
 // ---------------- Static ----------------
 app.use('/uploads', express.static(UPLOAD_DIR, { maxAge: '7d', setHeaders: (res) => res.setHeader('X-Content-Type-Options', 'nosniff') }));
+app.get('/board', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'board.html')));
 app.use(express.static(PUBLIC_DIR));
 
 app.use('/api', (req, res) => res.status(404).json({ error: 'រកមិនឃើញ API នេះទេ' }));
@@ -1196,214 +1505,13 @@ app.use((err, req, res, next) => {
 });
 
 if (require.main === module) {
-  console.log(BAKONG_READY
-    ? `💳 KHQR checkout ON (${BAKONG.env}, API ${BAKONG.baseUrl})`
-    : '💳 KHQR checkout OFF (set BAKONG_TOKEN, BAKONG_ACCOUNT_ID, BAKONG_MERCHANT_NAME to enable)');
-  setInterval(() => paymentWorkerTick().catch((e) => console.error(e.message)), 2000).unref();
   autoBackup();                                   // on start (skipped if one exists from the last 20h)
   setInterval(autoBackup, 6 * 3600e3).unref();    // then check every 6h
+  maintenance();
+  setInterval(maintenance, Number(process.env.MAINT_MS) || 60e3).unref(); // auto-cancel stale orders, daily Telegram summary
+  setInterval(() => paymentTick().catch((e) => console.error('paymentTick:', e.message)), Number(process.env.PAY_POLL_MS) || 4000).unref();
+  if (process.env.KHQR_ENABLED === 'true' && !payEnabled()) console.warn('⚠️  KHQR_ENABLED=true but BAKONG_TOKEN / BAKONG_ACCOUNT is missing: online KHQR checkout stays OFF.');
+  if (payEnabled()) console.log(`💳 KHQR checkout ON (${payMode()}) -> ${bakongBase()}`);
   app.listen(PORT, () => console.log(`☕ Mlob Doung Coffee running on http://localhost:${PORT}`));
 }
-// Test hook (only when NODE_ENV=test) so the payment state machine can be exercised without HTTP
-if (process.env.NODE_ENV === 'test') app.__test = { verifyPayment, paymentWorkerTick, cancelAwaitingOrders, db };
 module.exports = app;
-'use strict';
-/**
- * Thin client for the Bakong Open API (National Bank of Cambodia).
- * Docs: https://api-bakong.nbc.gov.kh/document  (check_transaction_by_md5 works for DYNAMIC KHQR only)
- *
- * The token is only ever sent from the server (Authorization header). It is never logged or returned.
- */
-
-/**
- * @returns {Promise<{state: 'found'|'not_found'|'failed'|'unauthorized'|'forbidden'|'ratelimited'|'error', data?: object, http?: number, message?: string}>}
- *  found        -> Bakong has a successful transaction for this QR (data.hash/amount/currency/...)
- *  not_found    -> no transaction yet (errorCode 1)
- *  failed       -> Bakong reports the transaction failed (errorCode 3)
- *  unauthorized -> token missing / expired / rejected (HTTP 401 or errorCode 6)
- *  forbidden    -> HTTP 403 (token not allowed, or the API refuses the caller's IP/region)
- *  ratelimited  -> HTTP 429
- *  error        -> network error, timeout, 5xx, or an unexpected response. Always treated as "unknown": retry later.
- */
-async function checkTransactionByMd5({ baseUrl, token, md5, timeoutMs = 10000, fetchImpl }) {
-  const doFetch = fetchImpl || globalThis.fetch;
-  if (typeof doFetch !== 'function') return { state: 'error', message: 'fetch is not available (use Node 18+)' };
-  const url = String(baseUrl).replace(/\/+$/, '') + '/v1/check_transaction_by_md5';
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-  let res, text;
-  try {
-    res = await doFetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
-      body: JSON.stringify({ md5 }),
-      signal: ctrl.signal,
-    });
-    text = await res.text();
-  } catch (e) {
-    return { state: 'error', message: e && e.name === 'AbortError' ? 'timeout' : 'network error: ' + (e && e.message) };
-  } finally {
-    clearTimeout(timer);
-  }
-
-  if (res.status === 401) return { state: 'unauthorized', http: 401, message: 'token rejected or expired' };
-  if (res.status === 403) return { state: 'forbidden', http: 403, message: 'forbidden (token not authorised, or API blocks this server IP/region)' };
-  if (res.status === 429) return { state: 'ratelimited', http: 429, message: 'rate limited' };
-  if (res.status >= 500) return { state: 'error', http: res.status, message: 'bakong server error ' + res.status };
-
-  let body;
-  try { body = JSON.parse(text); } catch (_) { return { state: 'error', http: res.status, message: 'invalid JSON from bakong' }; }
-  if (!body || typeof body !== 'object') return { state: 'error', http: res.status, message: 'unexpected response' };
-
-  if (body.responseCode === 0 && body.data && typeof body.data === 'object') return { state: 'found', data: body.data, http: res.status };
-  if (body.responseCode === 1) {
-    if (body.errorCode === 1) return { state: 'not_found', http: res.status, message: body.responseMessage };
-    if (body.errorCode === 3) return { state: 'failed', http: res.status, message: body.responseMessage };
-    if (body.errorCode === 6) return { state: 'unauthorized', http: res.status, message: body.responseMessage };
-    return { state: 'error', http: res.status, message: `bakong errorCode ${body.errorCode}: ${body.responseMessage || ''}` };
-  }
-  return { state: 'error', http: res.status, message: 'unexpected response shape' };
-}
-
-/** Reads the expiry from the JWT payload (no signature check; only used for a warning in the dashboard). */
-function tokenInfo(token) {
-  try {
-    const payload = JSON.parse(Buffer.from(String(token).split('.')[1], 'base64url').toString('utf8'));
-    if (!payload.exp) return { expMs: null, daysLeft: null };
-    const expMs = payload.exp * 1000;
-    return { expMs, daysLeft: Math.floor((expMs - Date.now()) / 86400000) };
-  } catch (_) {
-    return { expMs: null, daysLeft: null };
-  }
-}
-
-module.exports = { checkTransactionByMd5, tokenInfo };
-
-'use strict';
-/**
- * Minimal KHQR (EMVCo-based) encoder / decoder for DYNAMIC payment QR codes.
- *
- * - No network, no secrets. Pure functions.
- * - Field layout follows the public KHQR / EMV merchant-presented QR structure
- *   (tags 00,01,29|30,52,53,54,58,59,60,62,99,63).
- * - The official NBC SDK (npm "bakong-khqr") produces the same kind of string. If you prefer the
- *   official SDK, replace buildDynamicKhqr() only; nothing else in the app depends on this file.
- */
-const crypto = require('crypto');
-
-const CURRENCY_CODE = { USD: '840', KHR: '116' };
-
-/** CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF) as required by EMV QR. Returns 4 upper-case hex chars. */
-function crc16(str) {
-  let crc = 0xffff;
-  for (let i = 0; i < str.length; i++) {
-    crc ^= str.charCodeAt(i) << 8;
-    for (let b = 0; b < 8; b++) crc = crc & 0x8000 ? ((crc << 1) ^ 0x1021) & 0xffff : (crc << 1) & 0xffff;
-  }
-  return crc.toString(16).toUpperCase().padStart(4, '0');
-}
-
-function tlv(tag, value) {
-  const v = String(value);
-  if (v.length > 99) throw new Error(`KHQR tag ${tag} is longer than 99 characters`);
-  return tag + String(v.length).padStart(2, '0') + v;
-}
-
-function asciiField(value, max, label, required = true) {
-  const v = String(value ?? '').replace(/[^\x20-\x7E]/g, '').trim();
-  if (!v && required) throw new Error(`KHQR ${label} is required (ASCII only)`);
-  if (v.length > max) throw new Error(`KHQR ${label} must be at most ${max} characters`);
-  return v;
-}
-
-/** USD -> "2.25" (2 decimals), KHR -> "9200" (whole riel). amountMinor = cents (USD) or riel (KHR). */
-function formatAmount(currency, amountMinor) {
-  if (!Number.isInteger(amountMinor) || amountMinor <= 0) throw new Error('KHQR amount must be a positive integer (minor units)');
-  return currency === 'USD' ? (amountMinor / 100).toFixed(2) : String(amountMinor);
-}
-
-/**
- * Build a dynamic KHQR string (amount + currency + bill number + creation/expiry timestamps).
- * @param {object} o
- *  accountType   'individual' (tag 29) | 'merchant' (tag 30)
- *  accountId     Bakong account id, e.g. "name@bank"
- *  accountInfo   individual: optional account number inside tag 29 (sub-tag 01)
- *  acquiringBank optional (individual) / required (merchant) bank name
- *  merchantId    required for merchant
- *  merchantName  <=25 ASCII, merchantCity <=15 ASCII, mcc 4 digits
- *  currency      'USD' | 'KHR'
- *  amountMinor   integer, cents (USD) or riel (KHR)
- *  billNumber    <=25 chars (our unique payment reference)
- *  storeLabel    optional <=25
- *  createdMs / expiresMs   13-digit epoch milliseconds
- */
-function buildDynamicKhqr(o) {
-  const currency = String(o.currency || '').toUpperCase();
-  if (!CURRENCY_CODE[currency]) throw new Error('KHQR currency must be USD or KHR');
-  if (!Number.isInteger(o.createdMs) || !Number.isInteger(o.expiresMs) || o.expiresMs <= o.createdMs) throw new Error('KHQR needs createdMs < expiresMs');
-  if (String(o.createdMs).length !== 13 || String(o.expiresMs).length !== 13) throw new Error('KHQR timestamps must be 13-digit epoch milliseconds');
-
-  const accountId = asciiField(o.accountId, 32, 'accountId');
-  let account;
-  if ((o.accountType || 'individual') === 'merchant') {
-    account = tlv('30', tlv('00', accountId) + tlv('01', asciiField(o.merchantId, 32, 'merchantId')) + tlv('02', asciiField(o.acquiringBank, 32, 'acquiringBank')));
-  } else {
-    const info = asciiField(o.accountInfo, 32, 'accountInfo', false);
-    const bank = asciiField(o.acquiringBank, 32, 'acquiringBank', false);
-    account = tlv('29', tlv('00', accountId) + (info ? tlv('01', info) : '') + (bank ? tlv('02', bank) : ''));
-  }
-  const mcc = String(o.mcc || '5999');
-  if (!/^\d{4}$/.test(mcc)) throw new Error('KHQR merchant category code must be 4 digits');
-
-  const bill = asciiField(o.billNumber, 25, 'billNumber');
-  const store = asciiField(o.storeLabel, 25, 'storeLabel', false);
-
-  const body =
-    tlv('00', '01') +
-    tlv('01', '12') + // 12 = dynamic QR
-    account +
-    tlv('52', mcc) +
-    tlv('53', CURRENCY_CODE[currency]) +
-    tlv('54', formatAmount(currency, o.amountMinor)) +
-    tlv('58', 'KH') +
-    tlv('59', asciiField(o.merchantName, 25, 'merchantName')) +
-    tlv('60', asciiField(o.merchantCity || 'Phnom Penh', 15, 'merchantCity')) +
-    tlv('62', tlv('01', bill) + (store ? tlv('03', store) : '')) +
-    tlv('99', tlv('00', String(o.createdMs)) + tlv('01', String(o.expiresMs)));
-  const withCrcTag = body + '6304';
-  return withCrcTag + crc16(withCrcTag);
-}
-
-function parseTlv(s) {
-  const out = [];
-  let i = 0;
-  while (i < s.length) {
-    const lenStr = s.slice(i + 2, i + 4);
-    if (i + 4 > s.length || !/^\d\d$/.test(lenStr)) throw new Error('malformed KHQR');
-    const len = parseInt(lenStr, 10);
-    const val = s.slice(i + 4, i + 4 + len);
-    if (val.length !== len) throw new Error('malformed KHQR (length)');
-    out.push([s.slice(i, i + 2), val]);
-    i += 4 + len;
-  }
-  return out;
-}
-
-/** True when the trailing CRC (tag 63) matches the content. */
-function verifyKhqr(str) {
-  const s = String(str);
-  return s.length > 8 && s.slice(-8, -4) === '6304' && crc16(s.slice(0, -4)) === s.slice(-4);
-}
-
-/** Decode into { tag: value } with nested maps for 29/30/62/99. Throws on malformed input. */
-function parseKhqr(str) {
-  const fields = {};
-  for (const [tag, val] of parseTlv(String(str))) {
-    fields[tag] = ['29', '30', '62', '99'].includes(tag) ? Object.fromEntries(parseTlv(val)) : val;
-  }
-  return fields;
-}
-
-const md5Of = (s) => crypto.createHash('md5').update(String(s)).digest('hex');
-
-module.exports = { crc16, tlv, buildDynamicKhqr, verifyKhqr, parseKhqr, md5Of, CURRENCY_CODE };
