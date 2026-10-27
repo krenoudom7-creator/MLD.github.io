@@ -326,8 +326,7 @@ if (db.prepare('SELECT COUNT(*) AS n FROM products').get().n === 0) {
     { id: 'prod-5', name: 'Milk Tea (តែគុជទឹកដោះគោ)', category: 'tea', price: 2.25, stock: 0, description: 'តែគុជឈ្ងុយឆ្ងាញ់ ជាមួយទឹកដោះគោស្រស់', image: u('photo-1558857563-b371033873b8') },
     { id: 'prod-6', name: 'Passion Soda (ផាសិនសូដា)', category: 'drink', price: 2.3, stock: 50, description: 'ផាសិនស្រស់ លាយសូដាត្រជាក់បកបេះដូង', image: u('photo-1513558161293-cdaf765ed2fd') },
     { id: 'prod-7', name: 'Butter Croissant (នំប័ុងក្រូសង់)', category: 'bakery', price: 1.8, stock: 15, description: 'នំប័ុងក្រូសង់ប៊័រស្រស់ ក្តៅៗស្រួយឆ្ងាញ់', image: u('photo-1555507036-ab1f4038808a') },
-​​    { id: 'prod-8', name: 'Matchar Late(ម៉ាត់ឆាឡាតេ)', category: 'bakery', price: 1.8, stock: 15, description: 'ម៉ាត់ឆាឡាតេមានរស់ជាតិឆ្ងាញ់ប្លែក', image: u('https://www.bing.com/search?q=Matcha+Latte&filters=ufn%3a%22Matcha+Latte%22+sid%3a%2245113ea8bf970507efc9f396f4a4a7e1%22+segment%3a%22generic.carousel%22+secq%3a%22Matchar+Late%22+supwlcar%3a%221%22+tsource%3a%22EntitySegments%22+recipequerylanguage%3a%22en%22+catesegtype%3a%22recipe%22+cack%3a%226d29b3f4-ddd3-497c-a1e1-fe0acf45474c%22+segtype%3a%22UmVjaXBlLFJlY2lwZQ%3d%3d%22+ctype%3a%220%22+mltype%3a%220%22+eltypedim1%3a%22Recipe%22&eeptype=EntityFull&FORM=RECICA') },
-  ];
+​​      ];
   tx(() => seed.forEach((s) => ins.run(s)))();
 }
 
