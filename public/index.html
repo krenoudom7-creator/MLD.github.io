@@ -1437,7 +1437,7 @@
             </div>
 
             <div id="upsellBox" class="mb-3 d-none"></div>
-            <div class="border-top border-secondary border-opacity-25 pt-3">
+            <div class="border-top border-secondary border-opacity-25 pt-3 mb-2">
                 <div class="row g-2 mb-3">
                     <div class="col-7">
                         <label class="form-label text-gold small fw-bold mb-1">ឈ្មោះអតិថិជន <span class="text-danger">*</span></label>
@@ -1538,11 +1538,34 @@
 
     <script>
         // ----------------------------------------------------
-        // 0. API CLIENT (Backend connection)
+        // 0. GLOBAL STATE & API CLIENT (Backend connection)
         // ----------------------------------------------------
         const API_BASE = (localStorage.getItem('udom_api_base') || '').replace(/\/+$/, '');
         let adminToken = sessionStorage.getItem('udom_admin_token');
         let backendOnline = true;
+        
+        // Admin Auth State
+        let isAdminLoggedIn = !!adminToken; // Initialize immediately so initial render knows
+        let mustChangePw = false;
+        let adminRole = 'owner';
+        let adminSelf = null;
+
+        // Shared Database State
+        let products = [];
+        let orders = [];
+
+        // Cart State
+        let cart = [];
+        let selectedProductForSugar = null;
+        let currentPosCategory = 'all';
+
+        // Orders (KDS) State
+        let currentKdsFilter = 'all';
+        let currentKdsViewMode = 'grid';
+
+        // Temporary Data
+        let currentUploadedImageData = null;
+        let itemToDeleteId = null;
 
         function esc(v) {
             return String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1610,8 +1633,6 @@
 
         // ----------------------------------------------------
         // SOUND ALERTS (Web Audio, no audio files needed)
-        //  - New order  -> bell "ding-dong" x2
-        //  - Order ready -> rising 4-note chime
         // ----------------------------------------------------
         let audioCtx = null;
         let soundOn = true;
@@ -1865,8 +1886,6 @@
         // CURRENCY, ROLES, PAYMENT, REPORTS, SETTINGS, TRACKING
         // ----------------------------------------------------
         let settings = { exchangeRate: 4100, khqrImage: '' };
-        let adminRole = 'owner';
-        let adminSelf = null;
 
         async function loadSettings() {
             try { settings = await api('/api/settings'); renderCart(); applyPauseUi(); } catch (_) { /* offline */ }
@@ -1916,7 +1935,7 @@
             if (o.payStatus === 'paid') {
                 const labels = { cash: 'សាច់ប្រាក់', khqr: 'KHQR', other: 'ផ្សេងៗ' };
                 h += '<hr class="rc-sep">';
-                h += `<div class="rc-row"><span>បង់ដោយ</span><span>${labels[o.payMethod] || ''}</span></div>`;
+                h += `<div class="rc-row"><span>បង់ដោយ</span><span>${labels[o.payMethod] || o.payMethod || ''}</span></div>`;
                 if (o.payMethod === 'cash') {
                     h += `<div class="rc-row"><span>ប្រាក់ទទួល</span><span>${o.receivedCur === 'KHR' ? fmtKhr(o.received) : money(o.received)}</span></div>`;
                     const chg = o.receivedCur === 'KHR' ? fmtKhr(r100(o.changeUsd)) : money(o.changeUsd) + ' (' + fmtKhr(r100(o.changeUsd)) + ')';
@@ -2222,7 +2241,7 @@
         // ---------- Checkout options: delivery + online KHQR ----------
         const deliveryOn = () => { const c = document.getElementById('cartDelivery'); return !!(settings.deliveryEnabled && c && c.checked); };
         const currentDeliveryFee = () => (deliveryOn() ? Number(settings.deliveryFee || 0) : 0);
-        const isOnlinePay = () => { const c = document.getElementById('payChoiceOnline'); return !!(settings.khqrOnline && c && c.checked); };
+        const isOnlinePay = () => { const c = document.getElementById('payChoiceOnline'); return !!(settings.khqrOnline && c?.checked); }; // Fixed possible null error
         function deliveryPayload() {
             return deliveryOn() ? { delivery: true, phone: document.getElementById('cartPhone').value.trim(), address: document.getElementById('cartAddress').value.trim() } : {};
         }
@@ -2642,573 +2661,6 @@
             return { ...o, timestamp: new Date(o.createdAt).toLocaleTimeString('en-US') };
         }
         
-        // Shared Database State
-        let products = [];
-        let orders = [];
-
-        
-        // Admin Auth State
-        let isAdminLoggedIn = false;
-        let mustChangePw = false;
-
-        // Cart State
-        let cart = [];
-        let selectedProductForSugar = null;
-        let currentPosCategory = 'all';
-
-        // Orders (KDS) State
-        let currentKdsFilter = 'all';
-        let currentKdsViewMode = 'grid';
-
-        // Modals & Toast Instances
-        let sugarModalInstance = null;
-        let productModalInstance = null;
-        let adminLoginModalInstance = null;
-        let apiConfigModalInstance = null;
-        let changePasswordModalInstance = null;
-        let receiptModalInstance = null;
-        let confirmDeleteModalInstance = null;
-        let toastInstance = null;
-
-        // Temporary Image Preview Data
-        let currentUploadedImageData = null;
-        let itemToDeleteId = null;
-
-        document.addEventListener('DOMContentLoaded', async () => {
-            // Initialize Modals
-            sugarModalInstance = new bootstrap.Modal(document.getElementById('sugarModal'));
-            productModalInstance = new bootstrap.Modal(document.getElementById('productFormModal'));
-            adminLoginModalInstance = new bootstrap.Modal(document.getElementById('adminLoginModal'));
-            apiConfigModalInstance = new bootstrap.Modal(document.getElementById('apiConfigModal'));
-            changePasswordModalInstance = new bootstrap.Modal(document.getElementById('changePasswordModal'));
-            document.getElementById('changePasswordModal').addEventListener('hidden.bs.modal', () => {
-                if (mustChangePw) { mustChangePw = false; clearAdminSession(); setAdminLoggedInState(false); showToast('ត្រូវប្តូរពាក្យសម្ងាត់មុនចូលប្រើ'); }
-            });
-            receiptModalInstance = new bootstrap.Modal(document.getElementById('receiptModal'));
-            confirmDeleteModalInstance = new bootstrap.Modal(document.getElementById('confirmDeleteModal'));
-            toastInstance = new bootstrap.Toast(document.getElementById('orderToast'));
-
-            // Restore admin session (verify token with backend)
-            setAdminLoggedInState(false);
-            if (adminToken) {
-                try { const me = await api('/api/auth/me', { auth: true }); if (me.admin.mustChange) throw new Error('must change'); adminSelf = me.admin; adminRole = me.admin.role || 'owner'; setAdminLoggedInState(true); }
-                catch (_) { clearAdminSession(); setAdminLoggedInState(false); }
-            }
-
-            // Init Clock
-            updateClock();
-            setInterval(updateClock, 1000);
-
-            // Load data from Backend (orders only load when admin is logged in)
-            await Promise.all([loadProductsFromDb(), refreshOrders(), loadBanners(), loadSettings()]);
-            renderCategoryChips();
-            renderPosProducts();
-            renderCart();
-            renderDashboard();
-            renderAdminTable();
-
-            // Keep Admin orders in sync (only while logged in)
-            setInterval(async () => {
-                if (document.hidden || !isAdminLoggedIn) return;
-                await refreshOrders();
-                renderDashboard();
-            }, 5000);
-            setInterval(async () => {
-                if (document.hidden) return;
-                await loadProductsFromDb();
-                renderPosProducts();
-                renderAdminTable();
-                loadBanners(); loadSettings();
-            }, 30000);
-        });
-
-        // ----------------------------------------------------
-        // 1. CLOCK & NAVIGATION TABS
-        // ----------------------------------------------------
-        function updateClock() {
-            const now = new Date();
-            document.getElementById('clockDisplay').textContent = now.toLocaleTimeString('en-US');
-            document.getElementById('dateDisplay').textContent = now.toLocaleDateString('km-KH');
-        }
-
-        function switchTab(tab) {
-            const posSec = document.getElementById('posSection');
-            const adminSec = document.getElementById('adminSection');
-            const btnPos = document.getElementById('btnTabPos');
-            const btnAdmin = document.getElementById('btnTabAdmin');
-
-            posSec.classList.add('d-none');
-            adminSec.classList.add('d-none');
-            btnPos.className = 'btn btn-outline-gold rounded-pill px-3 py-2 fw-bold d-flex align-items-center gap-2';
-            btnAdmin.className = 'btn btn-outline-gold rounded-pill px-3 py-2 fw-bold d-flex align-items-center gap-2';
-
-            if (tab === 'pos') {
-                posSec.classList.remove('d-none');
-                btnPos.className = 'btn btn-gold rounded-pill px-3 py-2 fw-bold active d-flex align-items-center gap-2';
-                renderPosProducts();
-            } else if (tab === 'admin') {
-                adminSec.classList.remove('d-none');
-                btnAdmin.className = 'btn btn-gold rounded-pill px-3 py-2 fw-bold active d-flex align-items-center gap-2';
-                renderAdminTable();
-                renderDashboard();
-            }
-        }
-
-        // Admin sub-tabs: Products / Orders
-        function switchAdminSub(sub) {
-            currentAdminSub = sub;
-            const panes = { products: 'adminProductsPane', orders: 'adminOrdersPane', banners: 'adminBannersPane', reports: 'adminReportsPane', settings: 'adminSettingsPane', audit: 'adminAuditPane', shifts: 'adminShiftsPane', payments: 'adminPaymentsPane' };
-            const btns = { products: 'adminSubProducts', orders: 'adminSubOrders', banners: 'adminSubBanners', reports: 'adminSubReports', settings: 'adminSubSettings', audit: 'adminSubAudit', shifts: 'adminSubShifts', payments: 'adminSubPayments' };
-            for (const k in panes) {
-                document.getElementById(panes[k]).classList.toggle('d-none', k !== sub);
-                const b = document.getElementById(btns[k]);
-                b.className = 'btn rounded-pill px-4 fw-bold ' + (k === 'orders' ? 'position-relative ' : '') + (k === sub ? 'btn-gold' : 'btn-outline-gold');
-                if (k !== 'orders' && k !== 'shifts') b.setAttribute('data-owner', '');
-                b.classList.toggle('d-none', adminRole !== 'owner' && k !== 'orders' && k !== 'shifts');
-            }
-            if (sub === 'orders') refreshOrders().then(renderDashboard);
-            if (sub === 'banners') loadAdminBanners();
-            if (sub === 'reports') { if (!document.getElementById('reportFrom').value) setReportRange('7d'); else loadReports(); }
-            if (sub === 'settings') loadAdminSettings();
-            if (sub === 'audit') loadAudit();
-            if (sub === 'shifts') loadShifts();
-            if (sub === 'payments') loadPayments();
-        }
-
-        // ----------------------------------------------------
-        // 2. DATABASE ENGINE (BACKEND API)
-        // ----------------------------------------------------
-        async function loadProductsFromDb() {
-            try {
-                products = (isAdminLoggedIn && adminRole === 'owner')
-                    ? await api('/api/admin/products', { auth: true })
-                    : await api('/api/products');
-            } catch (err) {
-                if (err.status === 0) showToast('⚠️ ' + err.message);
-            }
-        }
-
-        // Orders are admin-only now
-        async function refreshOrders() {
-            if (!isAdminLoggedIn) { orders = []; knownStatus = null; return; }
-            try {
-                const fresh = (await api('/api/admin/orders', { auth: true })).map(mapOrder).filter(o => !(o.channel === 'online' && o.payStatus === 'unpaid'));
-                detectOrderEvents(fresh);
-                orders = fresh;
-            } catch (err) { /* offline / session expired */ }
-        }
-
-        function openApiConfigModal() {
-            document.getElementById('apiBaseInput').value = API_BASE;
-            document.getElementById('apiTestResult').textContent = '';
-            apiConfigModalInstance.show();
-        }
-
-        async function testApiConnection() {
-            const base = document.getElementById('apiBaseInput').value.trim().replace(/\/+$/, '');
-            const out = document.getElementById('apiTestResult');
-            out.className = 'small mb-3 text-secondary';
-            out.textContent = 'កំពុងសាកល្បង...';
-            try {
-                const r = await fetch(base + '/api/health');
-                if (!r.ok) throw new Error('HTTP ' + r.status);
-                out.className = 'small mb-3 text-success';
-                out.textContent = '✔ ភ្ជាប់ Backend បានជោគជ័យ';
-            } catch (e) {
-                out.className = 'small mb-3 text-danger';
-                out.textContent = '✖ មិនអាចភ្ជាប់បានទេ៖ ' + e.message;
-            }
-        }
-
-        function saveApiConfig(e) {
-            e.preventDefault();
-            const base = document.getElementById('apiBaseInput').value.trim().replace(/\/+$/, '');
-            if (base) localStorage.setItem('udom_api_base', base); else localStorage.removeItem('udom_api_base');
-            clearAdminSession(); // token belongs to the previous backend
-            location.reload();
-        }
-
-        // ----------------------------------------------------
-        // 3. ADMIN AUTHENTICATION
-        // ----------------------------------------------------
-        function openAdminLoginModal() {
-            adminLoginModalInstance.show();
-        }
-
-        async function handleAdminLogin(e) {
-            e.preventDefault();
-            const username = document.getElementById('loginUsername').value.trim();
-            const password = document.getElementById('loginPassword').value;
-            try {
-                const res = await api('/api/auth/login', { method: 'POST', body: { username, password } });
-                adminToken = res.token;
-                adminSelf = res.admin;
-                adminRole = res.admin.role || 'owner';
-                sessionStorage.setItem('udom_admin_token', adminToken);
-                document.getElementById('loginPassword').value = '';
-                if (res.admin.mustChange) { // default password: must be replaced before anything else
-                    adminLoginModalInstance.hide();
-                    mustChangePw = true;
-                    openChangePasswordModal();
-                    showToast('សូមប្តូរពាក្យសម្ងាត់លំនាំដើមមុនបន្ត');
-                    return;
-                }
-                await finishAdminLogin();
-            } catch (err) {
-                alert(err.message);
-            }
-        }
-
-        async function finishAdminLogin() {
-            setAdminLoggedInState(true);
-            adminLoginModalInstance.hide();
-            await loadProductsFromDb();
-            await refreshOrders();
-            renderDashboard();
-            renderAdminTable();
-            renderPosProducts();
-            showToast('ចូលប្រើប្រាស់ជា Admin ដោយជោគជ័យ!');
-        }
-
-        async function handleAdminLogout() {
-            clearAdminSession();
-            setAdminLoggedInState(false);
-            orders = [];
-            renderDashboard();
-            switchTab('pos');
-            await loadProductsFromDb();
-            renderPosProducts();
-            showToast('បានចាកចេញពី Admin');
-        }
-
-        function openChangePasswordModal() {
-            document.getElementById('cpCurrent').value = '';
-            document.getElementById('cpNew').value = '';
-            changePasswordModalInstance.show();
-        }
-
-        async function handleChangePassword(e) {
-            e.preventDefault();
-            try {
-                await api('/api/auth/change-password', { method: 'POST', auth: true, body: {
-                    currentPassword: document.getElementById('cpCurrent').value,
-                    newPassword: document.getElementById('cpNew').value
-                }});
-                const wasForced = mustChangePw;
-                mustChangePw = false;
-                changePasswordModalInstance.hide();
-                showToast('បានប្តូរពាក្យសម្ងាត់ដោយជោគជ័យ!');
-                if (wasForced) await finishAdminLogin();
-            } catch (err) { alert(err.message); }
-        }
-
-        function setAdminLoggedInState(loggedIn) {
-            isAdminLoggedIn = loggedIn;
-            const navContainer = document.getElementById('adminAuthNav');
-            const lockBadge = document.getElementById('adminLockBadge');
-            const guardNotice = document.getElementById('adminGuardNotice');
-            const mainContent = document.getElementById('adminMainContent');
-
-            if (loggedIn) {
-                navContainer.innerHTML = `
-                    <div class="d-flex align-items-center gap-2">
-                        <span class="badge bg-gold text-dark"><i class="fa-solid fa-user-check me-1"></i> ${adminRole === 'owner' ? 'Admin' : 'Cashier'}</span>
-                        <button class="btn btn-sm btn-outline-danger rounded-pill px-2" onclick="handleAdminLogout()" title="Logout">
-                            <i class="fa-solid fa-power-off"></i>
-                        </button>
-                    </div>
-                `;
-                if (lockBadge) lockBadge.className = 'badge bg-success';
-                if (lockBadge) lockBadge.innerHTML = '<i class="fa-solid fa-check"></i>';
-                if (guardNotice) guardNotice.classList.add('d-none');
-                if (mainContent) mainContent.classList.remove('d-none');
-                applyRoleUi();
-            } else {
-                orders = []; // clear order data when logged out / token expired
-                knownStatus = null;
-                navContainer.innerHTML = `
-                    <button class="btn btn-sm btn-outline-light rounded-pill px-3" onclick="openAdminLoginModal()">
-                        <i class="fa-solid fa-right-to-bracket me-1"></i> ចូលគណនី Admin
-                    </button>
-                `;
-                if (lockBadge) lockBadge.className = 'badge bg-secondary';
-                if (lockBadge) lockBadge.innerHTML = '<i class="fa-solid fa-lock"></i>';
-                if (guardNotice) guardNotice.classList.remove('d-none');
-                if (mainContent) mainContent.classList.add('d-none');
-            }
-        }
-
-        // ----------------------------------------------------
-        // 4. ADMIN PRODUCT CRUD SYSTEM & FILE UPLOAD
-        // ----------------------------------------------------
-        function renderAdminTable() {
-            if (!isAdminLoggedIn) return;
-
-            const searchQuery = document.getElementById('adminSearchInput').value.toLowerCase().trim();
-            const catFilter = document.getElementById('adminCategoryFilter').value;
-            const statusFilter = document.getElementById('adminStatusFilter').value;
-
-            // Stats update
-            document.getElementById('statTotalProducts').textContent = products.length;
-            document.getElementById('statActiveProducts').textContent = products.filter(p => p.status === 'active').length;
-            document.getElementById('statOutOfStock').textContent = products.filter(p => p.stock <= 0).length;
-
-            const filtered = products.filter(p => {
-                const matchesSearch = p.name.toLowerCase().includes(searchQuery) || (p.description && p.description.toLowerCase().includes(searchQuery));
-                const matchesCat = (catFilter === 'all') || (p.category === catFilter);
-                const matchesStatus = (statusFilter === 'all') || (p.status === statusFilter);
-                return matchesSearch && matchesCat && matchesStatus;
-            });
-
-            document.getElementById('adminProductCountBadge').textContent = filtered.length;
-
-            const tbody = document.getElementById('adminProductsTableBody');
-            if (filtered.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="7" class="text-center py-4 text-secondary">មិនទាន់មានទិន្នន័យទំនិញឡើយ</td></tr>`;
-                return;
-            }
-
-            tbody.innerHTML = filtered.map(p => `
-                <tr>
-                    <td>
-                        <img src="${esc(imgUrl(p.image) || 'https://via.placeholder.com/60')}" class="rounded-3" style="width: 50px; height: 50px; object-fit: cover;" alt="${esc(p.name)}" onerror="this.src='https://via.placeholder.com/50?text=No+Img'">
-                    </td>
-                    <td>
-                        <div class="fw-bold text-white">${esc(p.name)}</div>
-                        <small class="text-secondary text-truncate d-block" style="max-width: 200px;">${esc(p.description || '-')}</small>
-                    </td>
-                    <td><span class="badge bg-dark border border-secondary text-capitalize">${getCategoryLabel(p.category)}</span></td>
-                    <td class="fw-bold text-gold">${priceHtml(p)}${p.discount ? `<span class="badge bg-danger ms-1">-${p.discount}%</span>` : ''}</td>
-                    <td>
-                        <div class="d-flex align-items-center gap-1">
-                            <button class="btn btn-sm btn-outline-secondary py-0 px-2 text-white" onclick="adjustProductStock('${p.id}', -1)">-</button>
-                            <span class="fw-bold px-1 ${p.stock <= 0 ? 'text-danger' : (p.stock < 10 ? 'text-warning' : 'text-white')}">${p.stock}</span>
-                            <button class="btn btn-sm btn-outline-secondary py-0 px-2 text-white" onclick="adjustProductStock('${p.id}', 1)">+</button>
-                        </div>
-                    </td>
-                    <td>
-                        <button class="btn btn-sm ${p.status === 'active' ? 'btn-outline-success' : 'btn-outline-secondary'} rounded-pill" onclick="toggleProductStatus('${p.id}')">
-                            ${p.status === 'active' ? '<i class="fa-solid fa-eye me-1"></i>សកម្ម' : '<i class="fa-solid fa-eye-slash me-1"></i>អសកម្ម'}
-                        </button>
-                    </td>
-                    <td class="text-center">
-                        <div class="btn-group btn-group-sm">
-                            <button class="btn btn-outline-warning" onclick="markSoldOut('${p.id}')" title="អស់ស្តុក (កំណត់ស្តុក = 0)"><i class="fa-solid fa-ban"></i></button>
-                            <button class="btn btn-outline-gold" onclick="openEditProductModal('${p.id}')" title="កែប្រែ">
-                                <i class="fa-solid fa-pen-to-square"></i>
-                            </button>
-                            <button class="btn btn-outline-danger" onclick="promptDeleteProduct('${p.id}')" title="លុប">
-                                <i class="fa-solid fa-trash"></i>
-                            </button>
-                        </div>
-                    </td>
-                </tr>
-            `).join('');
-        }
-
-        function getCategoryLabel(cat) {
-            switch(cat) {
-                case 'coffee': return 'កាហ្វេ';
-                case 'tea': return 'តែ & ឡាតេ';
-                case 'drink': return 'ភេសជ្ជៈ';
-                case 'bakery': return 'នំ';
-                case 'food': return 'ម្ហូបអាហារ';
-                default: return cat;
-            }
-        }
-
-        // Open Add Modal
-        function openAddProductModal() {
-            document.getElementById('productForm').reset();
-            document.getElementById('formProductId').value = '';
-            document.getElementById('formDiscount').value = 0;
-            updateDiscountPreview();
-            document.getElementById('productModalTitle').innerHTML = '<i class="fa-solid fa-box-open me-2"></i>បន្ថែមទំនិញថ្មី';
-            resetImagePreview();
-            productModalInstance.show();
-        }
-
-        // Open Edit Modal
-        function openEditProductModal(id) {
-            const p = products.find(item => item.id === id);
-            if (!p) return;
-
-            document.getElementById('formProductId').value = p.id;
-            document.getElementById('formProductName').value = p.name;
-            document.getElementById('formCategory').value = p.category;
-            document.getElementById('formPrice').value = p.price;
-            document.getElementById('formStock').value = p.stock;
-            document.getElementById('formDiscount').value = p.discount || 0;
-            updateDiscountPreview();
-            document.getElementById('formStatus').value = p.status;
-            document.getElementById('formDescription').value = p.description || '';
-            document.getElementById('formOptions').value = optionsToText(p.options || []);
-            document.getElementById('formImageUrl').value = (p.image || '').startsWith('/uploads/') ? '' : (p.image || '');
-
-            document.getElementById('productModalTitle').innerHTML = '<i class="fa-solid fa-pen-to-square me-2"></i>កែប្រែទំនិញ';
-
-            currentUploadedImageData = p.image || null;
-            if (p.image) {
-                showImagePreview(imgUrl(p.image));
-            } else {
-                resetImagePreview();
-            }
-
-            productModalInstance.show();
-        }
-
-        // Handling File Upload Preview (FileReader)
-        function handleImageFileSelect(event) {
-            const file = event.target.files[0];
-            if (!file) return;
-
-            if (file.size > 5 * 1024 * 1024) {
-                alert('ទំហំរូបភាពធំពេក! សូមជ្រើសរើសរូបភាពតូចជាង 5MB');
-                event.target.value = '';
-                return;
-            }
-
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                currentUploadedImageData = e.target.result; // Base64 Data URL
-                showImagePreview(currentUploadedImageData);
-                document.getElementById('formImageUrl').value = ''; // clear url input
-            };
-            reader.readAsDataURL(file);
-        }
-
-        function handleImageUrlInput(url) {
-            if (url.trim()) {
-                currentUploadedImageData = url.trim();
-                showImagePreview(url.trim());
-                document.getElementById('formImageFile').value = ''; // clear file input
-            } else {
-                resetImagePreview();
-            }
-        }
-
-        function showImagePreview(src) {
-            const placeholder = document.getElementById('previewPlaceholder');
-            const img = document.getElementById('previewImg');
-            placeholder.classList.add('d-none');
-            img.src = src;
-            img.classList.remove('d-none');
-        }
-
-        function resetImagePreview() {
-            currentUploadedImageData = null;
-            document.getElementById('previewPlaceholder').classList.remove('d-none');
-            const img = document.getElementById('previewImg');
-            img.src = '';
-            img.classList.add('d-none');
-        }
-
-        // Save Form (Add / Edit)
-        async function saveProductHandler(e) {
-            e.preventDefault();
-            if (!isAdminLoggedIn) return;
-
-            const id = document.getElementById('formProductId').value;
-            const name = document.getElementById('formProductName').value.trim();
-            const category = document.getElementById('formCategory').value;
-            const price = parseFloat(document.getElementById('formPrice').value);
-            const stock = parseInt(document.getElementById('formStock').value);
-            const discount = parseInt(document.getElementById('formDiscount').value) || 0;
-            const status = document.getElementById('formStatus').value;
-            const description = document.getElementById('formDescription').value.trim();
-
-            if (discount < 0 || discount > 100) {
-                alert('ការបញ្ចុះតម្លៃត្រូវតែនៅចន្លោះ 0-100%');
-                return;
-            }
-            if (!name || isNaN(price) || isNaN(stock)) {
-                alert('សូមបញ្ចូលទិន្នន័យឱ្យបានត្រឹមត្រូវ!');
-                return;
-            }
-
-            try {
-                // Image: uploaded file -> /api/admin/upload ; otherwise keep URL typed / existing image
-                let finalImage = (document.getElementById('formImageUrl').value || '').trim();
-                if (!finalImage && !document.getElementById('formImageFile').files.length && id) {
-                    const old = products.find(p => p.id === id);
-                    finalImage = old ? old.image : '';
-                }
-                const fileInput = document.getElementById('formImageFile');
-                if (fileInput.files.length > 0) {
-                    const fd = new FormData();
-                    fd.append('image', fileInput.files[0]);
-                    const up = await api('/api/admin/upload', { method: 'POST', auth: true, form: fd });
-                    finalImage = up.url;
-                }
-                if (!finalImage) finalImage = 'https://images.unsplash.com/photo-1517701604599-bb29b565090c?auto=format&fit=crop&w=400&q=80';
-
-                let options;
-                try { options = parseOptionsText(document.getElementById('formOptions').value); } catch (e) { alert(e.message); return; }
-                const productData = { name, category, price, discount, stock, status, description, image: finalImage, options };
-                if (id) {
-                    await api('/api/admin/products/' + encodeURIComponent(id), { method: 'PUT', auth: true, body: productData });
-                } else {
-                    await api('/api/admin/products', { method: 'POST', auth: true, body: productData });
-                }
-
-                await loadProductsFromDb();
-                productModalInstance.hide();
-                renderAdminTable();
-                renderPosProducts();
-                showToast(id ? 'បានកែប្រែទំនិញដោយជោគជ័យ!' : 'បានបន្ថែមទំនិញថ្មីដោយជោគជ័យ!');
-            } catch (err) {
-                alert(err.message);
-            }
-        }
-
-        async function adjustProductStock(id, delta) {
-            try {
-                const updated = await api(`/api/admin/products/${encodeURIComponent(id)}/stock`, { method: 'POST', auth: true, body: { delta } });
-                const i = products.findIndex(p => p.id === id);
-                if (i > -1) products[i] = updated;
-                renderAdminTable();
-                renderPosProducts();
-            } catch (err) { alert(err.message); }
-        }
-
-        async function toggleProductStatus(id) {
-            const p = products.find(item => item.id === id);
-            if (!p) return;
-            try {
-                const updated = await api('/api/admin/products/' + encodeURIComponent(id), { method: 'PATCH', auth: true,
-                    body: { status: p.status === 'active' ? 'inactive' : 'active' } });
-                const i = products.findIndex(x => x.id === id);
-                if (i > -1) products[i] = updated;
-                renderAdminTable();
-                renderPosProducts();
-            } catch (err) { alert(err.message); }
-        }
-
-        function promptDeleteProduct(id) {
-            const p = products.find(item => item.id === id);
-            if (!p) return;
-            itemToDeleteId = id;
-            document.getElementById('deleteConfirmText').textContent = `តើអ្នកពិតជាចង់លុបទំនិញ "${p.name}" ចេញពីប្រព័ន្ធមែនទេ?`;
-            confirmDeleteModalInstance.show();
-        }
-
-        document.getElementById('btnConfirmDelete').addEventListener('click', async () => {
-            if (itemToDeleteId) {
-                try {
-                    await api('/api/admin/products/' + encodeURIComponent(itemToDeleteId), { method: 'DELETE', auth: true });
-                    products = products.filter(p => p.id !== itemToDeleteId);
-                    showToast('បានលុបទំនិញរួចរាល់!');
-                } catch (err) { alert(err.message); }
-                itemToDeleteId = null;
-                confirmDeleteModalInstance.hide();
-                renderAdminTable();
-                renderPosProducts();
-            }
-        });
-
-        // ----------------------------------------------------
-        // 5. PUBLIC POS CATALOG & CART
-        // ----------------------------------------------------
         function filterCategory(category, btnElement) {
             currentPosCategory = category;
             document.querySelectorAll('#categoryFilters .category-btn').forEach(b => b.classList.remove('active'));
@@ -3395,8 +2847,13 @@
                 return;
             }
 
-            cart[index].quantity += delta;
-            if (cart[index].quantity <= 0) cart.splice(index, 1);
+            // ONLY REMOVE if it drops to 0 or below, otherwise just add delta
+            const newQty = item.quantity + delta;
+            if (newQty <= 0) {
+                cart.splice(index, 1);
+            } else {
+                cart[index].quantity = newQty;
+            }
             renderCart();
         }
 
