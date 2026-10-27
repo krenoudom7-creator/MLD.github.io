@@ -7,7 +7,7 @@ const crypto = require('crypto');
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
+const { rateLimit } = require('express-rate-limit'); // កែតម្រូវការ Import សម្រាប់ v7+
 const multer = require('multer');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
@@ -326,7 +326,9 @@ if (db.prepare('SELECT COUNT(*) AS n FROM products').get().n === 0) {
     { id: 'prod-5', name: 'Milk Tea (តែគុជទឹកដោះគោ)', category: 'tea', price: 2.25, stock: 0, description: 'តែគុជឈ្ងុយឆ្ងាញ់ ជាមួយទឹកដោះគោស្រស់', image: u('photo-1558857563-b371033873b8') },
     { id: 'prod-6', name: 'Passion Soda (ផាសិនសូដា)', category: 'drink', price: 2.3, stock: 50, description: 'ផាសិនស្រស់ លាយសូដាត្រជាក់បកបេះដូង', image: u('photo-1513558161293-cdaf765ed2fd') },
     { id: 'prod-7', name: 'Butter Croissant (នំប័ុងក្រូសង់)', category: 'bakery', price: 1.8, stock: 15, description: 'នំប័ុងក្រូសង់ប៊័រស្រស់ ក្តៅៗស្រួយឆ្ងាញ់', image: u('photo-1555507036-ab1f4038808a') },
-​​      ];
+    // កែតម្រូវឈ្មោះពី Matchar Late ទៅ Matcha Latte និងដូរ URL ឲ្យត្រូវ
+    { id: 'prod-8', name: 'Matcha Latte (ម៉ាត់ឆាឡាតេ)', category: 'bakery', price: 1.8, stock: 15, description: 'ម៉ាត់ឆាឡាតេមានរស់ជាតិឆ្ងាញ់ប្លែក', image: u('photo-1515823662972-da6a2e4d3002') },
+  ];
   tx(() => seed.forEach((s) => ins.run(s)))();
 }
 
@@ -474,7 +476,8 @@ app.set('trust proxy', 1);
 app.use(helmet({ contentSecurityPolicy: false, crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 // Same-origin only by default. Set CORS_ORIGIN=https://your-front-end (comma separated) to allow another site.
 if (process.env.CORS_ORIGIN) app.use(cors({ origin: process.env.CORS_ORIGIN.split(',') }));
-app.use(express.json({ limit: '100kb', verify: (req, res, buf) => { req.rawBody = buf; } })); // raw body is needed to check webhook signatures
+// កែតម្រូវ type: '*/*' ឲ្យវា Parse គ្រប់ Content-Type ការពារ Webhook ខុស Header
+app.use(express.json({ limit: '100kb', type: '*/*', verify: (req, res, buf) => { req.rawBody = buf; } })); 
 
 // Auth middleware
 function requireAdmin(req, res, next) {
@@ -524,8 +527,8 @@ app.post('/api/auth/login', loginLimiter, (req, res) => {
   const username = String(req.body.username ?? '').trim();
   const password = String(req.body.password ?? '');
   const admin = db.prepare('SELECT * FROM admins WHERE username = ?').get(username);
-  // Always run a compare to keep timing similar whether or not the user exists
-  const hash = admin ? admin.password_hash : '$2a$10$invalidinvalidinvalidinvalidinvalidinvalidinvalidinvali';
+  // Always run a compare to keep timing similar whether or not the user exists. កែតម្រូវទម្រង់ Dummy Hash ឲ្យត្រូវ Standard របស់ Bcrypt.
+  const hash = admin ? admin.password_hash : '$2a$10$XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX';
   const ok = bcrypt.compareSync(password, hash);
   if (!admin || !ok) { audit(null, 'login_failed', username.slice(0, 40), 'IP ' + req.ip); return res.status(401).json({ error: 'ឈ្មោះអ្នកប្រើ ឬពាក្យសម្ងាត់មិនត្រឹមត្រូវ!' }); }
   const token = jwt.sign({ sub: admin.id, username: admin.username }, JWT_SECRET, { expiresIn: TOKEN_TTL });
